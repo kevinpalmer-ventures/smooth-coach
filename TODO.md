@@ -9,3 +9,4 @@
 - [x] **Responsive presentation:** Delivers a mobile- and desktop-ready Soft Orchard Ritual interface, verified by 1280px and 375px preview captures.
 - [x] **Personal accounts:** Allows a user to sign in to their own Manus account, establishes a validated application session, shows account status, and keeps signed-in coaching state private to that account.
 - [x] **Weight progression:** Allows each signed-in user to add or update a dated weight in lb or kg, view their own chronological entries, and see a private progression graph, summary, and recent history.
+- [x] **Progression pictures:** Allows each signed-in user to securely upload a dated JPEG, PNG, or WebP progression picture with an optional caption, and see it only in their own private visual timeline.

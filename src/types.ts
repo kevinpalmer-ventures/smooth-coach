@@ -26,3 +26,10 @@ export type WeightEntry = {
   unit: "lb" | "kg";
   loggedAt: string;
 };
+
+export type ProgressPhoto = {
+  id: number;
+  capturedAt: string;
+  caption: string;
+  imageUrl: string;
+};

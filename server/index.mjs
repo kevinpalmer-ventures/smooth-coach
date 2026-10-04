@@ -17,9 +17,11 @@ const oauthPortalUrl = process.env.MANUS_OAUTH_PORTAL_URL;
 const oauthApiUrl = process.env.MANUS_OAUTH_API_URL;
 const jwtSecret = process.env.MANUS_JWT_SECRET;
 const databaseUrl = process.env.DATABASE_URL;
+const manusApiUrl = process.env.MANUS_API_URL;
+const manusApiKey = process.env.MANUS_API_KEY;
 
-if (!projectId || !oauthPortalUrl || !oauthApiUrl || !jwtSecret || !databaseUrl) {
-  throw new Error("Smooth Coach requires the managed OAuth, session, and database environment variables.");
+if (!projectId || !oauthPortalUrl || !oauthApiUrl || !jwtSecret || !databaseUrl || !manusApiUrl || !manusApiKey) {
+  throw new Error("Smooth Coach requires the managed OAuth, session, database, and storage environment variables.");
 }
 
 const pool = mysql.createPool({
@@ -120,6 +122,26 @@ async function ensureSchema() {
     KEY weight_entries_user_date (open_id, logged_at),
     CONSTRAINT fk_weight_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS progress_photos (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    open_id VARCHAR(255) NOT NULL,
+    storage_key VARCHAR(700) NOT NULL UNIQUE,
+    captured_at DATE NOT NULL,
+    caption VARCHAR(160) NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY progress_photos_user_date (open_id, captured_at),
+    CONSTRAINT fk_progress_photo_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS progress_photo_uploads (
+    storage_key VARCHAR(700) PRIMARY KEY,
+    open_id VARCHAR(255) NOT NULL,
+    content_type VARCHAR(50) NOT NULL,
+    declared_size INT UNSIGNED NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY progress_photo_uploads_owner (open_id, expires_at),
+    CONSTRAINT fk_progress_photo_upload_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
+  )`);
 }
 
 function validCoachState(state) {
@@ -133,6 +155,45 @@ function mapWeights(rows) {
     unit: row.unit,
     loggedAt: row.loggedAt
   }));
+}
+
+function isRealDate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00.000Z`).toISOString().startsWith(value);
+}
+
+const maxProgressPhotoBytes = 8 * 1024 * 1024;
+const photoExtensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+const photoPrefixFor = (openId) => `smooth-coach/progress-photos/${crypto.createHash("sha256").update(openId).digest("hex").slice(0, 32)}`;
+
+async function storagePresign(action, key) {
+  const endpoint = new URL(`/v1/storage/presign/${action}`, manusApiUrl);
+  endpoint.searchParams.set("path", key);
+  const response = await fetch(endpoint, { headers: { authorization: `Bearer ${manusApiKey}` } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || typeof payload.url !== "string") throw new Error(`Storage ${action} request failed`);
+  return payload.url;
+}
+
+async function mapProgressPhotos(rows) {
+  return Promise.all(rows.map(async (row) => ({
+    id: Number(row.id),
+    capturedAt: row.capturedAt,
+    caption: row.caption,
+    imageUrl: await storagePresign("get", row.storageKey)
+  })));
+}
+
+async function verifyUploadedPhoto(key, expectedType, declaredSize) {
+  const downloadUrl = await storagePresign("get", key);
+  const response = await fetch(downloadUrl, { headers: { range: "bytes=0-31" } });
+  const contentRange = response.headers.get("content-range");
+  const sizeMatch = contentRange?.match(/\/(\d+)$/);
+  const actualSize = Number(sizeMatch?.[1] ?? response.headers.get("content-length"));
+  const actualType = response.headers.get("content-type")?.split(";", 1)[0].toLowerCase();
+  await response.body?.cancel();
+  if (!response.ok || actualType !== expectedType || !Number.isFinite(actualSize) || actualSize < 1 || actualSize > declaredSize || actualSize > maxProgressPhotoBytes) {
+    throw new Error("Uploaded picture did not match its approved type or size.");
+  }
 }
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -248,7 +309,7 @@ app.post("/api/weights", requireUser, async (req, res, next) => {
   try {
     const { weight, unit, loggedAt } = req.body ?? {};
     const numericWeight = Number(weight);
-    const dateIsReal = typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(loggedAt) && new Date(`${loggedAt}T00:00:00.000Z`).toISOString().startsWith(loggedAt);
+    const dateIsReal = isRealDate(loggedAt);
     if (!Number.isFinite(numericWeight) || numericWeight <= 0 || numericWeight > 1000 || !["lb", "kg"].includes(unit) || !dateIsReal) {
       return res.status(400).json({ error: "Enter a positive weight, a valid date, and lb or kg." });
     }
@@ -265,6 +326,69 @@ app.post("/api/weights", requireUser, async (req, res, next) => {
       [req.smoothCoachUser.openId]
     );
     res.status(201).json({ weights: mapWeights(rows) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/progress-photos", requireUser, async (req, res, next) => {
+  try {
+    await upsertUser(req.smoothCoachUser);
+    const [rows] = await pool.execute(
+      "SELECT id, storage_key AS storageKey, DATE_FORMAT(captured_at, '%Y-%m-%d') AS capturedAt, caption FROM progress_photos WHERE open_id = ? ORDER BY captured_at ASC, id ASC",
+      [req.smoothCoachUser.openId]
+    );
+    res.json({ photos: await mapProgressPhotos(rows) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/progress-photos/presign", requireUser, async (req, res, next) => {
+  try {
+    const { contentType, size, capturedAt } = req.body ?? {};
+    if (typeof contentType !== "string" || !Object.hasOwn(photoExtensions, contentType) || !Number.isInteger(size) || size < 1 || size > maxProgressPhotoBytes || !isRealDate(capturedAt)) {
+      return res.status(400).json({ error: "Choose a dated JPEG, PNG, or WebP image up to 8 MB." });
+    }
+    await upsertUser(req.smoothCoachUser);
+    const prefix = photoPrefixFor(req.smoothCoachUser.openId);
+    const key = `${prefix}/${capturedAt}/${crypto.randomUUID()}.${photoExtensions[contentType]}`;
+    await pool.execute(
+      "INSERT INTO progress_photo_uploads (storage_key, open_id, content_type, declared_size, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 MINUTE))",
+      [key, req.smoothCoachUser.openId, contentType, size]
+    );
+    const uploadUrl = await storagePresign("put", key);
+    res.json({ key, uploadUrl });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/progress-photos", requireUser, async (req, res, next) => {
+  try {
+    const { key, capturedAt, caption } = req.body ?? {};
+    const prefix = `${photoPrefixFor(req.smoothCoachUser.openId)}/`;
+    const safeCaption = typeof caption === "string" ? caption.trim() : "";
+    if (typeof key !== "string" || !key.startsWith(prefix) || !isRealDate(capturedAt) || safeCaption.length > 160) {
+      return res.status(400).json({ error: "That picture record was not valid." });
+    }
+    await upsertUser(req.smoothCoachUser);
+    const [pendingUploads] = await pool.execute(
+      "SELECT content_type AS contentType, declared_size AS declaredSize FROM progress_photo_uploads WHERE storage_key = ? AND open_id = ? AND expires_at > UTC_TIMESTAMP()",
+      [key, req.smoothCoachUser.openId]
+    );
+    if (!pendingUploads[0]) return res.status(400).json({ error: "This upload was not approved or has expired. Choose the picture again." });
+    await verifyUploadedPhoto(key, pendingUploads[0].contentType, Number(pendingUploads[0].declaredSize));
+    await pool.execute(
+      "INSERT INTO progress_photos (open_id, storage_key, captured_at, caption) VALUES (?, ?, ?, ?)",
+      [req.smoothCoachUser.openId, key, capturedAt, safeCaption]
+    );
+    await pool.execute("DELETE FROM progress_photo_uploads WHERE storage_key = ? AND open_id = ?", [key, req.smoothCoachUser.openId]);
+    const [rows] = await pool.execute(
+      "SELECT id, storage_key AS storageKey, DATE_FORMAT(captured_at, '%Y-%m-%d') AS capturedAt, caption FROM progress_photos WHERE open_id = ? ORDER BY captured_at ASC, id ASC",
+      [req.smoothCoachUser.openId]
+    );
+    res.status(201).json({ photos: await mapProgressPhotos(rows) });
   } catch (error) {
     next(error);
   }

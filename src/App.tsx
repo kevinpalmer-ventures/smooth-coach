@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { avoidList, phasePrep, recipes, snacks, standardDirections } from "./cleanseData";
+import ProgressPhotos from "./ProgressPhotos";
 import WeightTracker from "./WeightTracker";
-import type { AccountUser, CoachState, DayEntry, PlanMode, View, WeightEntry } from "./types";
+import type { AccountUser, CoachState, DayEntry, PlanMode, ProgressPhoto, View, WeightEntry } from "./types";
 
 type RoutineTask = { id: string; eyebrow: string; title: string; detail: string };
 
@@ -52,6 +53,8 @@ function App() {
   const [accountStateReady, setAccountStateReady] = useState(false);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
   const [weightsLoading, setWeightsLoading] = useState(true);
+  const [photos, setPhotos] = useState<ProgressPhoto[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(true);
   const nudgeKey = useRef("");
 
   const activeRecipe = recipes[state.activeDay - 1];
@@ -71,12 +74,13 @@ function App() {
       setAuthLoading(true);
       setAccountStateReady(false);
       setWeightsLoading(true);
+      setPhotosLoading(true);
       try {
         const response = await fetch("/api/auth/me", { credentials: "same-origin" });
-        if (!response.ok) { if (active) { setAccount(null); setWeights([]); setState(loadState()); } return; }
+        if (!response.ok) { if (active) { setAccount(null); setWeights([]); setPhotos([]); setState(loadState()); } return; }
         const profile = await response.json() as { user?: AccountUser };
         if (!profile.user) return;
-        const [coachResponse, weightsResponse] = await Promise.all([fetch("/api/coach-state"), fetch("/api/weights")]);
+        const [coachResponse, weightsResponse, photosResponse] = await Promise.all([fetch("/api/coach-state"), fetch("/api/weights"), fetch("/api/progress-photos")]);
         if (!active) return;
         let accountCoachState = makeDefaultState();
         if (coachResponse.ok) {
@@ -89,8 +93,12 @@ function App() {
           const weightPayload = await weightsResponse.json() as { weights?: WeightEntry[] };
           setWeights(weightPayload.weights ?? []);
         }
-      } catch { if (active) { setAccount(null); setWeights([]); setState(loadState()); } }
-      finally { if (active) { setAuthLoading(false); setWeightsLoading(false); setAccountStateReady(true); } }
+        if (photosResponse.ok) {
+          const photoPayload = await photosResponse.json() as { photos?: ProgressPhoto[] };
+          setPhotos(photoPayload.photos ?? []);
+        }
+      } catch { if (active) { setAccount(null); setWeights([]); setPhotos([]); setState(loadState()); } }
+      finally { if (active) { setAuthLoading(false); setWeightsLoading(false); setPhotosLoading(false); setAccountStateReady(true); } }
     };
     void loadAccount();
     return () => { active = false; };
@@ -132,7 +140,9 @@ function App() {
     setState(makeDefaultState());
     setAccount(null);
     setWeights([]);
+    setPhotos([]);
     setWeightsLoading(false);
+    setPhotosLoading(false);
     try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); }
     finally { setAuthLoading(false); }
   };
@@ -141,6 +151,17 @@ function App() {
     const payload = await response.json() as { error?: string; weights?: WeightEntry[] };
     if (!response.ok) throw new Error(payload.error ?? "Unable to save this check-in.");
     setWeights(payload.weights ?? []);
+  };
+  const handlePhotoUpload = async (input: { file: File; capturedAt: string; caption: string }) => {
+    const presignResponse = await fetch("/api/progress-photos/presign", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ contentType: input.file.type, size: input.file.size, capturedAt: input.capturedAt }) });
+    const presignPayload = await presignResponse.json() as { error?: string; uploadUrl?: string; key?: string };
+    if (!presignResponse.ok || !presignPayload.uploadUrl || !presignPayload.key) throw new Error(presignPayload.error ?? "Unable to prepare this picture upload.");
+    const uploadResponse = await fetch(presignPayload.uploadUrl, { method: "PUT", headers: { "content-type": input.file.type }, body: input.file });
+    if (!uploadResponse.ok) throw new Error("The picture could not be uploaded. Please try again.");
+    const recordResponse = await fetch("/api/progress-photos", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ key: presignPayload.key, capturedAt: input.capturedAt, caption: input.caption }) });
+    const recordPayload = await recordResponse.json() as { error?: string; photos?: ProgressPhoto[] };
+    if (!recordResponse.ok) throw new Error(recordPayload.error ?? "The picture uploaded but could not be added to your timeline.");
+    setPhotos(recordPayload.photos ?? []);
   };
   const handleReminderToggle = async () => {
     if (state.reminders) { setState((current) => ({ ...current, reminders: false })); setReminderMessage("Nudges are off. You can switch them on any time."); return; }
@@ -165,7 +186,7 @@ function App() {
         {view === "program" && <ProgramView activeDay={state.activeDay} state={state} onDaySelect={setActiveDay} />}
         {view === "recipes" && <RecipesView activeDay={state.activeDay} search={recipeSearch} setSearch={setRecipeSearch} visibleRecipes={filteredRecipes} onDaySelect={setActiveDay} />}
         {view === "prep" && <PrepView onRecipeClick={(day) => setActiveDay(day, "recipes")} />}
-        {view === "progress" && <ProgressView state={state} completedDays={completedDays} nextDay={nextDay} onDaySelect={setActiveDay} account={account} authLoading={authLoading} weights={weights} weightsLoading={weightsLoading} onLogin={signIn} onSaveWeight={handleWeightSave} />}
+        {view === "progress" && <ProgressView state={state} completedDays={completedDays} nextDay={nextDay} onDaySelect={setActiveDay} account={account} authLoading={authLoading} weights={weights} weightsLoading={weightsLoading} photos={photos} photosLoading={photosLoading} onLogin={signIn} onSaveWeight={handleWeightSave} onUploadPhoto={handlePhotoUpload} />}
       </>}
     </main>
   </div>;
@@ -191,6 +212,18 @@ function TodayView({ recipe, activeDay, planMode, setPlanMode, tasks, completedT
 function ProgramView({ activeDay, state, onDaySelect }: { activeDay: number; state: CoachState; onDaySelect: (day: number, destination?: View) => void }) { return <div className="page-flow program-view"><section className="program-intro"><p className="eyebrow">The full rhythm</p><h2>Ten recipes, one day at a time.</h2><p>Each day uses one source recipe. Choose any day to make it your active guide, then return to Today for the coaching flow.</p></section><section className="timeline" aria-label="10-day cleanse program">{recipes.map((recipe, index) => { const progress = completionFor(state, recipe.day); const isActive = recipe.day === activeDay; return <article className={`timeline-item ${isActive ? "active" : ""} ${progress === 100 ? "finished" : ""}`} key={recipe.day}><div className="timeline-track"><span>{progress === 100 ? "✓" : String(recipe.day).padStart(2, "0")}</span>{index < recipes.length - 1 && <i />}</div><button className="timeline-card" onClick={() => onDaySelect(recipe.day)}><div><p>DAY {String(recipe.day).padStart(2, "0")} <span>{recipe.note.replace("Source note: ", "")}</span></p><h3>{recipe.name}</h3><small>{recipe.ingredients.slice(0, 3).join(" · ")}</small></div><div className="timeline-card-side"><strong>{progress}%</strong><span>Open day <b>→</b></span></div></button></article>; })}</section></div>; }
 function RecipesView({ activeDay, search, setSearch, visibleRecipes, onDaySelect }: { activeDay: number; search: string; setSearch: (value: string) => void; visibleRecipes: typeof recipes; onDaySelect: (day: number, destination?: View) => void }) { return <div className="page-flow recipes-view"><section className="library-heading"><div><p className="eyebrow">Recipe library</p><h2>Everything for the blend.</h2><p>Every ingredient and quantity below is drawn from the supplied source document.</p></div><label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find an ingredient or recipe" /></label></section><div className="recipe-library">{visibleRecipes.map((recipe) => <article className={`recipe-card ${recipe.day === activeDay ? "current" : ""}`} key={recipe.day}><div className="recipe-card-top"><span>DAY {String(recipe.day).padStart(2, "0")}</span><small>{recipe.note.replace("Source note: ", "")}</small></div><h3>{recipe.name}</h3><ul>{recipe.ingredients.map((ingredient) => <li key={ingredient}>{ingredient}</li>)}</ul><div className="recipe-card-bottom"><span>Greens + water first, then remaining ingredients.</span><button onClick={() => onDaySelect(recipe.day)}>Make today <b>→</b></button></div></article>)}</div>{visibleRecipes.length === 0 && <p className="empty-state">No recipe matches that search. Try a fruit, green, or recipe name.</p>}<section className="directions-card"><div><p className="eyebrow">Everyday blend method</p><h3>Four gentle steps</h3></div><ol>{standardDirections.map((direction) => <li key={direction}>{direction}</li>)}</ol></section></div>; }
 function PrepView({ onRecipeClick }: { onRecipeClick: (day: number) => void }) { return <div className="page-flow prep-view"><section className="program-intro"><p className="eyebrow">Set yourself up</p><h2>Prep with less friction.</h2><p>Use the phase lists as a simple packing guide. Open the recipe library for exact amounts before shopping.</p></section><div className="prep-phases">{phasePrep.map((phase, index) => <article className="phase-card" key={phase.label}><span className="phase-number">0{index + 1}</span><p className="eyebrow">{phase.label}</p><h3>{phase.days}</h3><ul>{phase.items.map((item) => <li key={item}>{item}</li>)}</ul><button onClick={() => onRecipeClick(index === 0 ? 1 : 6)}>Open phase recipes <span>→</span></button></article>)}</div><div className="prep-guidance-grid"><section className="guide-card"><p className="eyebrow">Morning prep</p><h3>One recipe for the day</h3><p>The source says each recipe makes approximately a full day’s smoothie. It describes unblended ingredients as roughly 72 oz, blending down to about 36–48 oz depending on water and blender size.</p><p>Divide into thirds or sip from the refrigerated batch as needed.</p></section><section className="guide-card contrast"><p className="eyebrow">Source food guide</p><h3>What to keep out of the cart</h3><div className="avoid-list">{avoidList.map((item) => <span key={item}>{item}</span>)}</div></section></div><SafetyNote /></div>; }
-function ProgressView({ state, completedDays, nextDay, onDaySelect, account, authLoading, weights, weightsLoading, onLogin, onSaveWeight }: { state: CoachState; completedDays: number; nextDay: number; onDaySelect: (day: number, destination?: View) => void; account: AccountUser | null; authLoading: boolean; weights: WeightEntry[]; weightsLoading: boolean; onLogin: () => void; onSaveWeight: (entry: { weight: number; unit: "lb" | "kg"; loggedAt: string }) => Promise<void>; }) { const activeReflection = dayEntry(state, state.activeDay).reflection; return <div className="page-flow progress-view"><section className="progress-hero"><div><p className="eyebrow">Your progress</p><h2>{completedDays === 10 ? "Your 10-day guide is complete." : `${completedDays} of 10 days in view.`}</h2><p>{account ? "Your coaching check-ins are syncing privately to your account." : "Progress is stored on this device. Sign in to keep coaching check-ins private to your account."}</p></div><div className="big-progress"><strong>{Math.round((completedDays / 10) * 100)}%</strong><span>program complete</span></div></section><WeightTracker user={account} loading={authLoading || weightsLoading} weights={weights} onLogin={onLogin} onSave={onSaveWeight} /><section className="day-matrix">{recipes.map((recipe) => { const progress = completionFor(state, recipe.day); return <button className={`matrix-day ${progress === 100 ? "finished" : ""} ${state.activeDay === recipe.day ? "active" : ""}`} onClick={() => onDaySelect(recipe.day)} key={recipe.day}><span>{progress === 100 ? "✓" : String(recipe.day).padStart(2, "0")}</span><strong>{recipe.name}</strong><small>{progress}% complete</small></button>; })}</section><section className="reflection-summary"><div><p className="eyebrow">Current reflection</p><h3>Day {state.activeDay}</h3><p>{activeReflection || "No note here yet. Go to Today whenever you want to capture a small observation."}</p></div><button onClick={() => onDaySelect(nextDay)}>Continue with day {nextDay} <span>→</span></button></section></div>; }
+function ProgressView({ state, completedDays, nextDay, onDaySelect, account, authLoading, weights, weightsLoading, photos, photosLoading, onLogin, onSaveWeight, onUploadPhoto }: { state: CoachState; completedDays: number; nextDay: number; onDaySelect: (day: number, destination?: View) => void; account: AccountUser | null; authLoading: boolean; weights: WeightEntry[]; weightsLoading: boolean; photos: ProgressPhoto[]; photosLoading: boolean; onLogin: () => void; onSaveWeight: (entry: { weight: number; unit: "lb" | "kg"; loggedAt: string }) => Promise<void>; onUploadPhoto: (input: { file: File; capturedAt: string; caption: string }) => Promise<void>; }) {
+  const activeReflection = dayEntry(state, state.activeDay).reflection;
+  return <div className="page-flow progress-view">
+    <section className="progress-hero"><div><p className="eyebrow">Your progress</p><h2>{completedDays === 10 ? "Your 10-day guide is complete." : `${completedDays} of 10 days in view.`}</h2><p>{account ? "Your coaching check-ins are syncing privately to your account." : "Progress is stored on this device. Sign in to keep coaching check-ins private to your account."}</p></div><div className="big-progress"><strong>{Math.round((completedDays / 10) * 100)}%</strong><span>program complete</span></div></section>
+    <WeightTracker user={account} loading={authLoading || weightsLoading} weights={weights} onLogin={onLogin} onSave={onSaveWeight} />
+    <ProgressPhotos user={account} loading={authLoading || photosLoading} photos={photos} onLogin={onLogin} onUpload={onUploadPhoto} />
+    <section className="day-matrix">{recipes.map((recipe) => {
+      const progress = completionFor(state, recipe.day);
+      return <button className={`matrix-day ${progress === 100 ? "finished" : ""} ${state.activeDay === recipe.day ? "active" : ""}`} onClick={() => onDaySelect(recipe.day)} key={recipe.day}><span>{progress === 100 ? "✓" : String(recipe.day).padStart(2, "0")}</span><strong>{recipe.name}</strong><small>{progress}% complete</small></button>;
+    })}</section>
+    <section className="reflection-summary"><div><p className="eyebrow">Current reflection</p><h3>Day {state.activeDay}</h3><p>{activeReflection || "No note here yet. Go to Today whenever you want to capture a small observation."}</p></div><button onClick={() => onDaySelect(nextDay)}>Continue with day {nextDay} <span>→</span></button></section>
+  </div>;
+}
 function SafetyNote() { return <details className="safety-note"><summary><span>✦</span> A practical health note <b>+</b></summary><div><p><strong>Smooth Coach organizes a user-supplied source—it is not medical advice or a medical “detox.”</strong> Speak with a qualified clinician before making a restrictive dietary change or adding supplements, especially if you are pregnant or breastfeeding, manage a medical condition, or take medication.</p><p>The supplied source mentions colon-cleansing methods and bowel-movement targets. This app does not turn those claims into a coaching step or recommendation.</p></div></details>; }
 export default App;
