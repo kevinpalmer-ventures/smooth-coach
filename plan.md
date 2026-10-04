@@ -1,14 +1,15 @@
 # Smooth Coach — Implementation Plan
 
 ## Product intent
-Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a calm, practical daily companion. It keeps the source recipes, serving guidance, snacks, water target, and food-avoidance list accessible while helping a user orient to one day at a time.
+Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a calm, practical daily companion. It keeps the source recipes, serving guidance, snacks, water target, and food-avoidance list accessible while helping a user orient to one day at a time. It now adds a personal account area and a private weight timeline for users who choose to sign in.
 
 ## Scope
 - A **Today** experience with the active recipe, four ordered routine actions, water tracking, a day reflection, source-aligned snack suggestions, and a next-day preview.
 - A 10-day program map, recipe library, phase-based preparation list, and progress overview.
 - Two source-derived routine shapes: three smoothies, or breakfast/lunch smoothies plus a healthy dinner.
 - Browser notification opt-in for open-tab coaching nudges; it is clearly described as an in-app/open-tab feature rather than a guaranteed background reminder.
-- Local browser storage for the selected day, completion state, water, reflection, plan shape, and reminder preference. No account, database, or health data transmission.
+- Manus account login with an authenticated application session. Signed-in users have their coaching check-ins stored under their account; a logged-out visitor can still read the source guide.
+- A private weight tracker for signed-in users: add or update one weight per date, choose lb or kg on the first entry, see a chronological chart, the latest logged weight, and change from the first entry. Weight data is always queried and written only for the authenticated account.
 - A clear medical/safety context explaining that this is an organizer for a supplied source, not medical advice, and deliberately not operationalizing the source's colon-cleansing/bowel-movement instruction.
 
 ## Design direction — Soft Orchard Ritual
@@ -16,8 +17,8 @@ Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a ca
 - **Core principles:** reduce choices; make the next action obvious; present progress without pressure; use source details only where useful.
 - **Color philosophy:** muted sage creates steadiness, peach offers a gentle reward cue, and warm cream keeps long recipe text approachable. Deep forest is reserved for hierarchy and actions.
 - **Layout paradigm:** a slim desktop rail leads into a layered, asymmetrical daily canvas; on mobile the rail collapses into a compact horizontal navigation while the active action stays first.
-- **Signature elements:** a round “today” progress dial, soft stacked cards with botanical corner shapes, and small ritual markers for preparation, sipping, water, and reflection.
-- **Interaction philosophy:** every interaction has a visible immediate result—checkboxes advance progress, water droplets fill, and a selected program day becomes the active guide.
+- **Signature elements:** a round “today” progress dial, soft stacked cards with botanical corner shapes, and small ritual markers for preparation, sipping, water, reflection, and private progress.
+- **Interaction philosophy:** every interaction has a visible immediate result—checkboxes advance progress, water droplets fill, account status is clear, and a weight entry updates the personal timeline.
 - **Animation:** short 180–260ms ease-out transitions for cards, toggles, and progress fills; no continuous motion and reduced-motion support.
 - **Typography:** Nunito Sans for friendly, legible UI hierarchy; a Georgia editorial fallback is used for recipe names and reflective prompts.
 - **Brand essence:** A gentle source-based day planner for a 10-day smoothie routine that turns a long document into the next useful action. **Personality:** compassionate, grounded, clear.
@@ -26,17 +27,19 @@ Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a ca
 - **Signature brand color:** Orchard Sage `#789B7B`.
 
 ## Architecture
-A static React + TypeScript + Vite application is sufficient. Source recipes live in `src/data/cleanseData.ts`; `src/App.tsx` renders view-specific coaching content and manages local browser persistence; `src/styles.css` owns the responsive visual system; `public/manus-routes.json` declares the single application route. The site is built as a static output and needs no server, database, or external API.
+React + TypeScript + Vite provide the browser experience. An Express server hosts the Vite development middleware and production static bundle, exposes authenticated APIs, and uses Manus OAuth for real account login. A managed MySQL-compatible database holds `user_profiles`, `user_coach_state`, and `weight_entries`. Account sessions use the required `webdev_app_session` cookie, HS256 JWT validation, a single-use OAuth nonce, `SameSite=None; Secure` cookie settings for Preview, and an account-scoped `open_id` on every database query. The server creates only additive tables at startup; no destructive database operation is used.
 
 ## Project structure
 | Path | Responsibility |
 | --- | --- |
-| `src/data/cleanseData.ts` | Faithful recipe, preparation, snack, and source-guidance content. |
-| `src/App.tsx` | App shell, state, daily coach, program, recipes, prep, and progress experiences. |
+| `src/cleanseData.ts` | Faithful recipe, preparation, snack, and source-guidance content. |
+| `src/App.tsx` | App shell, account state, coaching workflow, local fallback, and account syncing. |
+| `src/WeightTracker.tsx` | Account-scoped weight entry, summary, and visual timeline. |
+| `src/types.ts` | Shared client models for coaching state, account identity, and weight records. |
+| `server/index.mjs` | OAuth flow, validated session handling, database initialization, account APIs, and static/dev serving. |
 | `src/styles.css` | Soft Orchard Ritual tokens, layouts, responsive behavior, and accessible states. |
-| `src/main.tsx` | React entry point. |
-| `public/manus-routes.json` | Declares the web route set. |
-| `public/leaf-mark.svg` | Small botanical mark used for favicon/logo treatment. |
+| `Dockerfile` | Production container build for the server-backed site. |
+| `public/manus-routes.json` | Declares the single browser route. |
 
 ## Material constraints
-The health-related source is displayed as user-supplied material. The interface distinguishes source claims from medical instruction, adds a concise safety notice, and avoids giving operational colon-cleansing or bowel-movement advice.
+The health-related source is displayed as user-supplied material. The interface distinguishes source claims from medical instruction, adds a concise safety note, and avoids giving operational colon-cleansing or bowel-movement advice. Weight is personal health information: it is private to the signed-in user, is never included in public pages, and is described as a simple self-record rather than a clinical assessment.
