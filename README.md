@@ -16,7 +16,7 @@ Smooth Coach runs on your own Docker host:
 
 ### What you need
 
-- Docker with Compose v2
+- Docker with Compose v2.24 or newer
 - A domain, and a reverse proxy that terminates HTTPS for it
 - PostgreSQL 14 or newer
 - A Google account (or another OpenID Connect provider)
@@ -45,7 +45,7 @@ export SMOOTH_COACH_DB_PASSWORD='long-unique-app-password'
 
 This creates the `smooth_coach` database and the `smooth_coach_app` role, applies the schema, and prints `Tables verified: 4`. The app keeps the schema up to date itself on every start.
 
-If PostgreSQL runs on the Docker host itself, the app reaches it at `host.docker.internal`. PostgreSQL must listen on an address the containers can reach (for example `listen_addresses = '*'`), and `pg_hba.conf` must allow the Docker network (for example `host smooth_coach smooth_coach_app 172.16.0.0/12 scram-sha-256`).
+If PostgreSQL runs on the Docker host itself, the app reaches it at `host.docker.internal`. PostgreSQL must listen on an address the containers can reach (for example `listen_addresses = '*'`), and `pg_hba.conf` must allow the Docker network (for example `host smooth_coach smooth_coach_app 172.16.0.0/12 scram-sha-256`). If the host runs a firewall such as `ufw`, allow port 5432 from the Docker network too (for example `ufw allow from 172.16.0.0/12 to any port 5432 proto tcp`); a firewall that silently drops the traffic makes the app stop after about 10 seconds with a database connection timeout.
 
 ### 3. Create a Google sign-in client
 
@@ -55,6 +55,8 @@ If PostgreSQL runs on the Docker host itself, the app reaches it at `host.docker
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID**, type **Web application**.
 5. Add the authorized redirect URI `https://coach.example.com/api/auth/callback` (your domain).
 6. Copy the client ID and client secret.
+
+**Sign-up is open.** Once the consent screen is published, anyone with a Google account can sign in and get their own private account. The only limit on how much they can store is `GARAGE_CAPACITY` (default `10G`). If you want a closed group, keep the app unpublished ("Testing" mode, up to 100 listed test users), put the site behind your reverse proxy's access control, or use an OpenID Connect provider where you control who has an account (see [Other sign-in providers](#other-sign-in-providers)).
 
 ### 4. Configure
 
@@ -72,6 +74,14 @@ docker compose --env-file smooth-coach.env logs -f app
 ```
 
 Wait for `Smooth Coach is ready on port 3000`. If something is wrong, the app stops with a message naming the problem — for example `Smooth Coach requires these environment variables: …` or `Smooth Coach could not start: database: …` — and never prints secret values.
+
+If `up` fails or the app never starts, also check the storage setup log:
+
+```bash
+docker compose --env-file smooth-coach.env logs garage-init
+```
+
+The app waits for `garage-init` to finish, so a Garage problem shows up there first.
 
 ### 6. Point your reverse proxy at it
 
@@ -129,6 +139,12 @@ Then forward to `smooth-coach-app-1` port `3000`. In Nginx Proxy Manager, also a
 5. Sign out, then sign in with a second Google account: it must not see the first account's weight or photo.
 
 If sign-in shows "The sign-in request could not be verified", check that `APP_URL` exactly matches the address in your browser and that the redirect URI in Google is `APP_URL/api/auth/callback`. The app log names the reason.
+
+### Keeping storage settings stable
+
+- `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are imported into Garage the first time `garage-init` runs. Changing the secret in `smooth-coach.env` later does **not** update the key Garage already stored (`garage-init` keeps an existing key), so the app can no longer sign its photo requests. Keep both values stable. To rotate them, first delete the old key in Garage (for example with the `garage` CLI inside the `garage` container), then run `docker compose --env-file smooth-coach.env up -d` again so `garage-init` imports the new one.
+- `GARAGE_CAPACITY` only applies on first setup. Changing it later has no effect on an existing Garage volume.
+- The Garage image is pinned (`dxflrs/garage:v2.4.1`). When you upgrade it, re-check `deploy/garage/setup.mjs` against the new version's admin API before deploying, because setup relies on that API.
 
 ### Backups
 

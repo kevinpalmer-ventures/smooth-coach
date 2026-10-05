@@ -1,6 +1,6 @@
-# Claude handoff — Smooth Coach PostgreSQL setup and driver migration
+# Claude handoff — Smooth Coach PostgreSQL setup
 
-> **Status:** the application migration (steps 6–9 below) is done in the repository: the server uses `pg`, applies `deploy/postgres/smooth-coach-schema.sql` at startup, and was validated against PostgreSQL 16. Images published **before** that change (including the old `venturesconsulting/smooth-coach:latest`) still use `mysql2` and will **not** connect to PostgreSQL — deploy an image built from the migrated source.
+> **Current architecture:** the server already uses `pg`, reads `DATABASE_URL`, and applies `deploy/postgres/smooth-coach-schema.sql` at every start. This prompt only provisions the database and role and verifies the result; it does not change application code. For the full deployment, follow the self-hosting guide in `README.md`.
 
 Attach the two files in `deploy/postgres/` to Claude Code (or place them in the repository), then paste the prompt below.
 
@@ -8,7 +8,7 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 
 ## Prompt to give Claude
 
-> You are preparing the Smooth Coach Docker application to use an existing **PostgreSQL 14+** database. Do not use MySQL and do not make unrelated infrastructure changes.
+> You are preparing an existing **PostgreSQL 14+** database for the Smooth Coach Docker application. Do not use MySQL, do not change application code, and do not make unrelated infrastructure changes.
 >
 > ### Database provisioning
 > 1. Confirm the target is PostgreSQL 14+ and identify the intended host, port, TLS/CA requirements, and the deployment network. Stop and ask if it is not PostgreSQL or if the target is unclear.
@@ -17,21 +17,12 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 > 4. Run the provisioning script once. It may create/alter only the named Smooth Coach role, database, schema objects, and privileges. Do not alter, delete, or inspect unrelated databases, roles, tables, or data.
 > 5. Verify exactly four application tables exist, and that the app role can connect using the required TLS settings. Never print passwords, full credential-bearing URLs, or admin credentials.
 >
-> ### Required application migration
-> 6. Update the Smooth Coach server from `mysql2/promise` to the `pg` package and use `DATABASE_URL=postgresql://...` at runtime. Preserve SSL support; use the deployment provider’s certificate guidance instead of globally disabling certificate validation unless the provider explicitly requires it.
-> 7. Replace MySQL-only SQL syntax in `server/index.mjs` with PostgreSQL equivalents while preserving behavior:
->    - positional `?` parameters → `$1`, `$2`, etc.; use `result.rows`
->    - `ON DUPLICATE KEY UPDATE` → `ON CONFLICT (...) DO UPDATE`
->    - `DATE_FORMAT(date, '%Y-%m-%d')` → `to_char(date, 'YYYY-MM-DD')`
->    - `DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 MINUTE)` → `CURRENT_TIMESTAMP + INTERVAL '15 minutes'`
->    - `BIGINT AUTO_INCREMENT` is already represented by the provided PostgreSQL identity columns
->    - keep all account-scoping, foreign keys, and photo type/size verification intact
-> 8. Do not mix the MySQL and PostgreSQL paths. After migration, remove the MySQL driver dependency and update any package lockfile.
-> 9. Start the app with a PostgreSQL `DATABASE_URL`; validate `/api/health`, schema initialization, sign-in-required endpoints, a saved coach state, a weight entry, and a photo upload. Do not use production user data for testing.
-> 10. Build the Docker image and publish a **new immutable version tag** only after validation. Do not overwrite `latest` without explicit user approval.
+> ### Validation
+> 6. Start the app with a PostgreSQL `DATABASE_URL` (see the self-hosting guide in `README.md`); validate `/api/health`, schema initialization, sign-in-required endpoints, a saved coach state, a weight entry, and a photo upload. Do not use production user data for testing.
+> 7. Build the Docker image and publish a **new immutable version tag** only after validation. Do not overwrite `latest` without explicit user approval.
 >
 > ### Secrets and completion
-> 11. Store the app connection string in the deployment secret manager in this form, URL-encoding the role/password as needed:
+> 8. Store the app connection string in the deployment secret manager in this form, URL-encoding the role/password as needed:
 >
 >     ```text
 >     postgresql://SMOOTH_COACH_DB_USER:URL_ENCODED_PASSWORD@PG_ADMIN_HOST:5432/SMOOTH_COACH_DATABASE?sslmode=verify-full
@@ -39,7 +30,7 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 >
 >     TLS is controlled entirely by this URL. `sslmode=verify-full` validates the server certificate against the system CAs. If the provider signs with its own CA (for example the RDS bundle), mount that PEM file into the container and add `&sslrootcert=/path/to/ca.pem`. Use `sslmode=no-verify` only if the provider explicitly requires it.
 >
-> 12. Report only: database host, port, database name, app role, schema verification result, migration/test status, and the new image tag/digest if one is published.
+> 9. Report only: database host, port, database name, app role, schema verification result, test status, and the new image tag/digest if one is published.
 
 ---
 
