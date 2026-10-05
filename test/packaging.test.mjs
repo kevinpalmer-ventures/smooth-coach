@@ -22,7 +22,7 @@ describe("docker-compose.yml", () => {
   });
 
   it("gives each service only the variables it needs", () => {
-    assert.deepEqual(envKeys("app"), ["APP_URL", "DATABASE_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_ISSUER", "S3_ACCESS_KEY_ID", "S3_BUCKET", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE", "S3_REGION", "S3_SECRET_ACCESS_KEY", "SESSION_SECRET"]);
+    assert.deepEqual(envKeys("app"), ["APP_URL", "DATABASE_STARTUP_TIMEOUT", "DATABASE_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_ISSUER", "S3_ACCESS_KEY_ID", "S3_BUCKET", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE", "S3_REGION", "S3_SECRET_ACCESS_KEY", "SESSION_SECRET"]);
     assert.deepEqual(envKeys("garage"), ["GARAGE_ADMIN_TOKEN", "GARAGE_RPC_SECRET"]);
     assert.deepEqual(envKeys("garage-init"), ["GARAGE_ADMIN_TOKEN", "GARAGE_ADMIN_URL", "GARAGE_CAPACITY", "S3_ACCESS_KEY_ID", "S3_BUCKET", "S3_SECRET_ACCESS_KEY"]);
   });

@@ -38,6 +38,7 @@ describe("loadConfig", () => {
     assert.equal(config.s3.forcePathStyle, true);
     assert.equal(config.s3.bucket, "smooth-coach-photos");
     assert.equal(config.port, 3000);
+    assert.equal(config.databaseStartupTimeoutMs, 30000);
     assert.equal(config.isProduction, false);
   });
 
@@ -46,11 +47,13 @@ describe("loadConfig", () => {
   });
 
   it("reads optional values", () => {
-    const config = loadConfig({ ...validEnv(), S3_REGION: "garage", S3_FORCE_PATH_STYLE: "FALSE", PORT: "8080", NODE_ENV: "production" });
+    const config = loadConfig({ ...validEnv(), S3_REGION: "garage", S3_FORCE_PATH_STYLE: "FALSE", PORT: "8080", NODE_ENV: "production", DATABASE_STARTUP_TIMEOUT: "5" });
     assert.equal(config.s3.region, "garage");
     assert.equal(config.s3.forcePathStyle, false);
     assert.equal(config.port, 8080);
     assert.equal(config.isProduction, true);
+    assert.equal(config.databaseStartupTimeoutMs, 5000);
+    assert.equal(loadConfig({ ...validEnv(), DATABASE_STARTUP_TIMEOUT: "0" }).databaseStartupTimeoutMs, 0);
   });
 
   it("allows plain http only for loopback hosts", () => {
@@ -76,7 +79,9 @@ describe("loadConfig", () => {
     ["http OIDC_ISSUER on a public host", { OIDC_ISSUER: "http://accounts.example.com" }, /OIDC_ISSUER must be an https:\/\/ URL/],
     ["non-http S3_ENDPOINT", { S3_ENDPOINT: "ftp://garage:3900" }, /S3_ENDPOINT must be an http:\/\/ or https:\/\/ URL/],
     ["bad S3_FORCE_PATH_STYLE", { S3_FORCE_PATH_STYLE: "maybe" }, /S3_FORCE_PATH_STYLE must be true or false/],
-    ["bad PORT", { PORT: "eighty" }, /PORT must be a whole number/]
+    ["bad PORT", { PORT: "eighty" }, /PORT must be a whole number/],
+    ["non-numeric DATABASE_STARTUP_TIMEOUT", { DATABASE_STARTUP_TIMEOUT: "soon" }, /DATABASE_STARTUP_TIMEOUT must be a whole number of seconds/],
+    ["negative DATABASE_STARTUP_TIMEOUT", { DATABASE_STARTUP_TIMEOUT: "-1" }, /DATABASE_STARTUP_TIMEOUT must be a whole number of seconds/]
   ]) {
     it(`rejects ${name} without printing values`, () => {
       const message = configErrorMessage({ ...validEnv(), ...overrides });

@@ -56,6 +56,9 @@ export function loadConfig(env = process.env) {
   if (!["true", "false"].includes(forcePathStyle)) problems.push("S3_FORCE_PATH_STYLE must be true or false");
   const port = Number(env.PORT || 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push("PORT must be a whole number between 1 and 65535");
+  const databaseStartupTimeoutText = env.DATABASE_STARTUP_TIMEOUT || "30";
+  const databaseStartupTimeout = /^\d+$/.test(databaseStartupTimeoutText) ? Number(databaseStartupTimeoutText) : NaN;
+  if (!Number.isInteger(databaseStartupTimeout)) problems.push("DATABASE_STARTUP_TIMEOUT must be a whole number of seconds");
 
   if (problems.length) throw new ConfigError(`Smooth Coach configuration is invalid: ${problems.join("; ")}`);
 
@@ -73,6 +76,7 @@ export function loadConfig(env = process.env) {
       forcePathStyle: forcePathStyle === "true"
     }),
     port,
+    databaseStartupTimeoutMs: databaseStartupTimeout * 1000,
     isProduction: env.NODE_ENV === "production"
   });
 }

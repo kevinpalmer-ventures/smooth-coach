@@ -1,7 +1,8 @@
 // A TCP pass-through that tests can close to simulate the storage server going away.
 import net from "node:net";
 
-export async function startTcpProxy(targetPort, targetHost = "127.0.0.1") {
+// listenPort 0 picks a free port; tests pass a fixed one to make a service appear on a known port later.
+export async function startTcpProxy(targetPort, targetHost = "127.0.0.1", listenPort = 0) {
   const sockets = new Set();
   const clients = new Set();
   const server = net.createServer((client) => {
@@ -16,7 +17,7 @@ export async function startTcpProxy(targetPort, targetHost = "127.0.0.1") {
     client.pipe(upstream);
     upstream.pipe(client);
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise((resolve) => server.listen(listenPort, "127.0.0.1", resolve));
   return {
     port: server.address().port,
     // Connections currently open from the proxied client (the app server) to storage.

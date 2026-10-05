@@ -37,6 +37,33 @@ export function describeDatabaseError(error, databaseUrl) {
   return `${reason} (DATABASE_URL points at ${host}; inside the container that is the container itself, so use host.docker.internal for a PostgreSQL server on the Docker host)`;
 }
 
+// Network-not-ready errors worth retrying at startup (e.g. a macvlan link that needs a few seconds,
+// or a database container that is still starting). Bad credentials, a missing database or an
+// unknown host fail immediately instead.
+const transientCodes = new Set(["EHOSTUNREACH", "ENETUNREACH", "ECONNREFUSED", "ETIMEDOUT", "ECONNRESET", "EAI_AGAIN", "57P03"]);
+
+export function isTransientConnectionError(error) {
+  if (!error || typeof error !== "object") return false;
+  if (transientCodes.has(error.code)) return true;
+  if (Array.isArray(error.errors) && error.errors.some((item) => transientCodes.has(item?.code))) return true;
+  // pg-pool reports connectionTimeoutMillis without a code.
+  return /timeout exceeded when trying to connect|connection terminated due to connection timeout/i.test(error.message ?? "");
+}
+
+// Runs the operation, retrying transient connection errors every delayMs until timeoutMs has passed.
+export async function retryTransient(operation, { timeoutMs, delayMs = 1000, onRetry = () => {} }) {
+  const started = Date.now();
+  for (;;) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientConnectionError(error) || Date.now() - started + delayMs > timeoutMs) throw error;
+      onRetry(error);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 // Applies the idempotent, additive schema shared with deploy/postgres/setup-smooth-coach-postgres.sh.
 // The advisory lock keeps concurrently starting containers from applying it at the same time.
 export async function ensureSchema(pool) {

@@ -19,6 +19,7 @@ services:
     environment:
       APP_URL: ${APP_URL:?set APP_URL in smooth-coach.env}
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in smooth-coach.env}
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in smooth-coach.env}
       OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in smooth-coach.env}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in smooth-coach.env}

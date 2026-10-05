@@ -5,6 +5,7 @@ import { startFakeOidc } from "./helpers/fake-oidc.mjs";
 import { baseEnv, freePort, runServerUntilExit, startServer, testSessionSecret } from "./helpers/server.mjs";
 import { api, signIn } from "./helpers/session.mjs";
 import { createTestDatabase } from "./helpers/stack.mjs";
+import { startTcpProxy } from "./helpers/tcp-proxy.mjs";
 
 describe("server startup", () => {
   let provider;
@@ -33,12 +34,31 @@ describe("server startup", () => {
   });
 
   it("names the database when PostgreSQL is unreachable", async () => {
-    const env = baseEnv({ databaseUrl: "postgresql://postgres:nope@127.0.0.1:1/none?sslmode=disable", provider, port: await freePort() });
+    const env = { ...baseEnv({ databaseUrl: "postgresql://postgres:nope@127.0.0.1:1/none?sslmode=disable", provider, port: await freePort() }), DATABASE_STARTUP_TIMEOUT: "1" };
     await expectStartupFailure(env, /Smooth Coach could not start: database: \S/);
   });
 
+  it("waits for a database that becomes reachable after startup", async () => {
+    const target = new URL(database.databaseUrl);
+    const delayedPort = await freePort();
+    const delayedUrl = database.databaseUrl.replace(`${target.hostname}:${target.port}`, `127.0.0.1:${delayedPort}`);
+    const startup = startServer(baseEnv({ databaseUrl: delayedUrl, provider, port: await freePort() }));
+    startup.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const proxy = await startTcpProxy(Number(target.port), target.hostname, delayedPort);
+    let server;
+    try {
+      server = await startup;
+      assert.match(server.output(), /Smooth Coach is waiting for the database: .*ECONNREFUSED/);
+      assert.deepEqual((await api(server, "/api/health")).data, { ok: true });
+    } finally {
+      await server?.stop();
+      await proxy.close();
+    }
+  });
+
   it("explains a refused localhost database connection without printing the password", async () => {
-    const env = baseEnv({ databaseUrl: "postgresql://postgres:hunter2-secret@localhost:1/none?sslmode=disable", provider, port: await freePort() });
+    const env = { ...baseEnv({ databaseUrl: "postgresql://postgres:hunter2-secret@localhost:1/none?sslmode=disable", provider, port: await freePort() }), DATABASE_STARTUP_TIMEOUT: "1" };
     const { code, output } = await runServerUntilExit(env);
     assert.notEqual(code, 0);
     assert.match(output, /Smooth Coach could not start: database: \S/);

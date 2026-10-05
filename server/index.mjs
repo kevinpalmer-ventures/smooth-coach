@@ -7,7 +7,7 @@ import express from "express";
 import multer from "multer";
 import { createAuth } from "./auth.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
-import { createPool, describeDatabaseError, ensureSchema } from "./db.mjs";
+import { createPool, describeDatabaseError, ensureSchema, retryTransient } from "./db.mjs";
 import { describeError } from "./errors.mjs";
 import { contentTypeForKey, createPhotoStorage, photoTypes, sniffImageType } from "./photoStorage.mjs";
 
@@ -28,7 +28,10 @@ try {
 }
 
 const pool = createPool(config.databaseUrl);
-await ensureSchema(pool).catch((error) => exitOnStartupFailure("database", describeDatabaseError(error, config.databaseUrl)));
+await retryTransient(() => ensureSchema(pool), {
+  timeoutMs: config.databaseStartupTimeoutMs,
+  onRetry: (error) => console.warn(`Smooth Coach is waiting for the database: ${describeDatabaseError(error, config.databaseUrl)}`)
+}).catch((error) => exitOnStartupFailure("database", describeDatabaseError(error, config.databaseUrl)));
 const auth = await createAuth({ config, pool }).catch((error) => exitOnStartupFailure("sign-in provider", describeError(error)));
 const photoStorage = createPhotoStorage(config.s3);
 await photoStorage.checkBucket().catch((error) => exitOnStartupFailure("photo storage", describeError(error)));
