@@ -1,0 +1,63 @@
+# Smooth Coach on your own Docker host.
+# Start with:  docker compose --env-file smooth-coach.env up -d
+# PostgreSQL is your existing server (DATABASE_URL); photos live in the bundled Garage.
+name: smooth-coach
+
+services:
+  app:
+    image: venturesconsulting/smooth-coach:3.0.0
+    restart: unless-stopped
+    depends_on:
+      garage-init:
+        condition: service_completed_successfully
+    # Only your reverse proxy on this host should reach the app.
+    ports:
+      - "127.0.0.1:3000:3000"
+    # Lets DATABASE_URL use host.docker.internal for a PostgreSQL server on this host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      APP_URL: ${APP_URL:?set APP_URL in smooth-coach.env}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in smooth-coach.env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in smooth-coach.env}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in smooth-coach.env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in smooth-coach.env}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in smooth-coach.env}
+      S3_ENDPOINT: http://garage:3900
+      S3_REGION: garage
+      S3_FORCE_PATH_STYLE: "true"
+      S3_BUCKET: ${S3_BUCKET:-smooth-coach-photos}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in smooth-coach.env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in smooth-coach.env}
+
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?set GARAGE_RPC_SECRET in smooth-coach.env}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?set GARAGE_ADMIN_TOKEN in smooth-coach.env}
+    volumes:
+      - ./deploy/garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+  # One-shot, idempotent setup: storage layout, the app's key, the bucket, and its permissions.
+  garage-init:
+    image: node:22-alpine
+    restart: "no"
+    depends_on:
+      - garage
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?set GARAGE_ADMIN_TOKEN in smooth-coach.env}
+      GARAGE_CAPACITY: ${GARAGE_CAPACITY:-10G}
+      S3_BUCKET: ${S3_BUCKET:-smooth-coach-photos}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in smooth-coach.env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in smooth-coach.env}
+    volumes:
+      - ./deploy/garage:/garage-setup:ro
+    command: ["node", "/garage-setup/init.mjs"]
+
+volumes:
+  garage-meta:
+  garage-data:
