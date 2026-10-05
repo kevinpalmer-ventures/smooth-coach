@@ -47,10 +47,32 @@ describe("OIDC sign-in", () => {
     await provider.close();
   });
 
-  async function expectRejected(callback) {
+  // Silences the expected "Smooth Coach sign-in rejected: ..." warning and records what was logged.
+  function captureWarnings(t) {
+    const logged = [];
+    t.mock.method(console, "warn", (...args) => { logged.push(args.join(" ")); });
+    return logged;
+  }
+
+  // `loginCookieRejected` says whether the logged reason must be the login-cookie check (true)
+  // or some other check, such as the provider or token validation (false).
+  async function expectRejected(callback, logged, { loginCookieRejected, callbackUrl, loginCookie }) {
     assert.equal(callback.status, 400);
     assert.equal(await callback.text(), verificationFailed);
     assert.equal(callback.headers.getSetCookie().some((cookie) => cookie.startsWith("smooth_coach_session=") && !cookie.startsWith("smooth_coach_session=;")), false);
+    assert.equal(logged.length, 1, `expected one rejection warning, got: ${JSON.stringify(logged)}`);
+    assert.match(logged[0], /^Smooth Coach sign-in rejected: /);
+    assert.equal(logged[0].includes("missing, expired, or invalid login cookie"), loginCookieRejected, `unexpected rejection reason: ${logged[0]}`);
+    const code = new URL(callbackUrl).searchParams.get("code");
+    assert.ok(code);
+    assert.equal(logged[0].includes(code), false, "the log line contains the authorization code");
+    if (loginCookie) assert.equal(logged[0].includes(loginCookie), false, "the log line contains the login cookie");
+  }
+
+  // Re-signs the real login cookie's verifier, state, and nonce so that only the signature or expiry can fail.
+  function resignLoginCookie(loginCookie, secret, extra = {}) {
+    const { codeVerifier, state, nonce } = jwt.decode(loginCookie);
+    return jwt.sign({ codeVerifier, state, nonce, ...extra }, secret, { algorithm: "HS256", issuer: "smooth-coach", audience: "smooth-coach-login" });
   }
 
   it("redirects to the provider with PKCE, state, and nonce and sets a scoped login cookie", async () => {
@@ -93,36 +115,42 @@ describe("OIDC sign-in", () => {
     assert.deepEqual((await api(server, "/api/auth/me", { cookie: carol })).data.user, { openId: `${provider.issuer}|carol`, name: "Smooth Coach member", email: "" });
   });
 
-  it("rejects a tampered state", async () => {
+  it("rejects a tampered state", async (t) => {
+    const logged = captureWarnings(t);
     const { loginCookie, callbackUrl } = await startSignIn(server, provider);
     const tampered = new URL(callbackUrl);
     tampered.searchParams.set("state", "attacker-state");
-    await expectRejected(await finishSignIn(tampered.href, loginCookie));
+    await expectRejected(await finishSignIn(tampered.href, loginCookie), logged, { loginCookieRejected: false, callbackUrl, loginCookie });
   });
 
-  it("rejects a missing login cookie", async () => {
+  it("rejects a missing login cookie", async (t) => {
+    const logged = captureWarnings(t);
     const { callbackUrl } = await startSignIn(server, provider);
-    await expectRejected(await finishSignIn(callbackUrl, null));
+    await expectRejected(await finishSignIn(callbackUrl, null), logged, { loginCookieRejected: true, callbackUrl });
   });
 
-  it("rejects a login cookie signed with another secret", async () => {
-    const { callbackUrl } = await startSignIn(server, provider);
-    const state = new URL(callbackUrl).searchParams.get("state");
-    const forged = jwt.sign({ codeVerifier: "x".repeat(43), state, nonce: "n" }, "another-secret-0123456789abcdefghij", { algorithm: "HS256", issuer: "smooth-coach", audience: "smooth-coach-login" });
-    await expectRejected(await finishSignIn(callbackUrl, forged));
+  it("rejects a login cookie signed with another secret", async (t) => {
+    const logged = captureWarnings(t);
+    const { loginCookie, callbackUrl } = await startSignIn(server, provider);
+    // Real verifier, state, and nonce: only the signature check can reject this cookie.
+    const forged = resignLoginCookie(loginCookie, "another-secret-0123456789abcdefghij");
+    await expectRejected(await finishSignIn(callbackUrl, forged), logged, { loginCookieRejected: true, callbackUrl, loginCookie: forged });
   });
 
-  it("rejects an expired login cookie", async () => {
-    const { callbackUrl } = await startSignIn(server, provider);
-    const state = new URL(callbackUrl).searchParams.get("state");
-    const expired = jwt.sign({ codeVerifier: "x".repeat(43), state, nonce: "n", exp: Math.floor(Date.now() / 1000) - 60 }, config.sessionSecret, { algorithm: "HS256", issuer: "smooth-coach", audience: "smooth-coach-login" });
-    await expectRejected(await finishSignIn(callbackUrl, expired));
+  it("rejects an expired login cookie", async (t) => {
+    const logged = captureWarnings(t);
+    const { loginCookie, callbackUrl } = await startSignIn(server, provider);
+    // Real verifier, state, and nonce, correct secret: only the expiry check can reject this cookie.
+    const expired = resignLoginCookie(loginCookie, config.sessionSecret, { exp: Math.floor(Date.now() / 1000) - 60 });
+    await expectRejected(await finishSignIn(callbackUrl, expired), logged, { loginCookieRejected: true, callbackUrl, loginCookie: expired });
   });
 
-  it("rejects a replayed callback", async () => {
+  it("rejects a replayed callback (provider rejects the reused code)", async (t) => {
+    const logged = captureWarnings(t);
     const { loginCookie, callbackUrl } = await startSignIn(server, provider);
     assert.equal((await finishSignIn(callbackUrl, loginCookie)).status, 302);
-    await expectRejected(await finishSignIn(callbackUrl, loginCookie));
+    assert.equal(logged.length, 0);
+    await expectRejected(await finishSignIn(callbackUrl, loginCookie), logged, { loginCookieRejected: false, callbackUrl, loginCookie });
   });
 
   for (const [name, tamper] of [
@@ -131,9 +159,10 @@ describe("OIDC sign-in", () => {
     ["a wrong issuer", { iss: "http://attacker.example" }],
     ["an ID token signed by an unknown key", { signWithRogueKey: true }]
   ]) {
-    it(`rejects ${name}`, async () => {
+    it(`rejects ${name}`, async (t) => {
+      const logged = captureWarnings(t);
       const { loginCookie, callbackUrl } = await startSignIn(server, provider, { tamper });
-      await expectRejected(await finishSignIn(callbackUrl, loginCookie));
+      await expectRejected(await finishSignIn(callbackUrl, loginCookie), logged, { loginCookieRejected: false, callbackUrl, loginCookie });
     });
   }
 
