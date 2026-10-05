@@ -34,7 +34,17 @@ describe("server startup", () => {
 
   it("names the database when PostgreSQL is unreachable", async () => {
     const env = baseEnv({ databaseUrl: "postgresql://postgres:nope@127.0.0.1:1/none?sslmode=disable", provider, port: await freePort() });
-    await expectStartupFailure(env, /Smooth Coach could not start: database:/);
+    await expectStartupFailure(env, /Smooth Coach could not start: database: \S/);
+  });
+
+  it("explains a refused localhost database connection without printing the password", async () => {
+    const env = baseEnv({ databaseUrl: "postgresql://postgres:hunter2-secret@localhost:1/none?sslmode=disable", provider, port: await freePort() });
+    const { code, output } = await runServerUntilExit(env);
+    assert.notEqual(code, 0);
+    assert.match(output, /Smooth Coach could not start: database: \S/);
+    assert.match(output, /ECONNREFUSED/);
+    assert.match(output, /host\.docker\.internal/);
+    assert.ok(!output.includes("hunter2-secret"), "output must not include the database password");
   });
 
   it("names the sign-in provider when OIDC_ISSUER is unreachable", async () => {

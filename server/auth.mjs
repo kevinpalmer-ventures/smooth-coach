@@ -2,6 +2,7 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import * as client from "openid-client";
+import { describeError } from "./errors.mjs";
 
 export const sessionCookie = "smooth_coach_session";
 export const loginCookie = "smooth_coach_login";
@@ -45,7 +46,7 @@ async function discover(config) {
   try {
     return await client.discovery(issuerUrl, config.oidc.clientId, config.oidc.clientSecret, undefined, { execute });
   } catch (error) {
-    throw new Error(`could not load provider configuration from OIDC_ISSUER (${error.cause?.code ?? error.code ?? error.message})`);
+    throw new Error(`could not load provider configuration from OIDC_ISSUER (${describeError(error)})`);
   }
 }
 

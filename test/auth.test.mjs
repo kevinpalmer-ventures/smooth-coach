@@ -185,7 +185,7 @@ describe("OIDC sign-in", () => {
   });
 
   it("fails clearly when the provider cannot be reached", async () => {
-    const unreachable = loadConfig({ ...baseEnv({ databaseUrl: database.databaseUrl, provider, port: 3000 }), OIDC_ISSUER: "http://127.0.0.1:1" });
-    await assert.rejects(createAuth({ config: unreachable, pool }), /could not load provider configuration from OIDC_ISSUER/);
+    const unreachable = loadConfig({ ...baseEnv({ databaseUrl: database.databaseUrl, provider, port: 3000 }), OIDC_ISSUER: `http://127.0.0.1:${await freePort()}` });
+    await assert.rejects(createAuth({ config: unreachable, pool }), /could not load provider configuration from OIDC_ISSUER \(.*ECONNREFUSED/);
   });
 });

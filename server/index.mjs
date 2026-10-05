@@ -7,13 +7,14 @@ import express from "express";
 import multer from "multer";
 import { createAuth } from "./auth.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
-import { createPool, ensureSchema } from "./db.mjs";
+import { createPool, describeDatabaseError, ensureSchema } from "./db.mjs";
+import { describeError } from "./errors.mjs";
 import { contentTypeForKey, createPhotoStorage, photoTypes, sniffImageType } from "./photoStorage.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function exitOnStartupFailure(component, error) {
-  console.error(`Smooth Coach could not start: ${component}: ${error.message}`);
+function exitOnStartupFailure(component, reason) {
+  console.error(`Smooth Coach could not start: ${component}: ${reason}`);
   process.exit(1);
 }
 
@@ -27,10 +28,10 @@ try {
 }
 
 const pool = createPool(config.databaseUrl);
-await ensureSchema(pool).catch((error) => exitOnStartupFailure("database", error));
-const auth = await createAuth({ config, pool }).catch((error) => exitOnStartupFailure("sign-in provider", error));
+await ensureSchema(pool).catch((error) => exitOnStartupFailure("database", describeDatabaseError(error, config.databaseUrl)));
+const auth = await createAuth({ config, pool }).catch((error) => exitOnStartupFailure("sign-in provider", describeError(error)));
 const photoStorage = createPhotoStorage(config.s3);
-await photoStorage.checkBucket().catch((error) => exitOnStartupFailure("photo storage", error));
+await photoStorage.checkBucket().catch((error) => exitOnStartupFailure("photo storage", describeError(error)));
 const { requireUser } = auth;
 
 const app = express();
@@ -184,7 +185,7 @@ app.get("/api/progress-photos/:id/image", requireUser, async (req, res, next) =>
 });
 
 app.use((error, _req, res, _next) => {
-  console.error("Smooth Coach server error", error instanceof Error ? error.message : error);
+  console.error("Smooth Coach server error", describeError(error));
   res.status(500).json({ error: "Smooth Coach could not complete that request. Please try again." });
 });
 
