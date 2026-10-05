@@ -8,11 +8,12 @@
     "dev": "node server/index.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test",
+    "test": "node --test \"test/*.test.mjs\"",
     "test:stack:up": "docker compose -f test/compose.yml up -d",
     "test:stack:down": "docker compose -f test/compose.yml down -v"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
