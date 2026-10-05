@@ -5,6 +5,8 @@
 
 BEGIN;
 
+-- open_id holds the account ID "<OIDC issuer>|<subject>" (name kept from earlier versions).
+-- Databases created by 2.x may also contain an unused progress_photo_uploads table; it is left in place.
 CREATE TABLE IF NOT EXISTS user_profiles (
   open_id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
@@ -44,18 +46,6 @@ CREATE TABLE IF NOT EXISTS progress_photos (
 
 CREATE INDEX IF NOT EXISTS progress_photos_user_date
   ON progress_photos (open_id, captured_at);
-
-CREATE TABLE IF NOT EXISTS progress_photo_uploads (
-  storage_key TEXT PRIMARY KEY,
-  open_id TEXT NOT NULL REFERENCES user_profiles(open_id) ON DELETE CASCADE,
-  content_type VARCHAR(50) NOT NULL,
-  declared_size INTEGER NOT NULL CHECK (declared_size > 0),
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS progress_photo_uploads_owner
-  ON progress_photo_uploads (open_id, expires_at);
 
 CREATE OR REPLACE FUNCTION smooth_coach_set_updated_at()
 RETURNS TRIGGER

@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import express from "express";
 import jwt from "jsonwebtoken";
-import pg from "pg";
+import { createPool, ensureSchema } from "./db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -28,13 +27,7 @@ if (missingEnv.length) {
   throw new Error(`Smooth Coach requires the managed OAuth, session, database, and storage environment variables. Missing: ${missingEnv.join(", ")}`);
 }
 
-// TLS is configured through DATABASE_URL (sslmode=verify-full, plus sslrootcert=/path/to/ca.pem
-// when the provider uses its own certificate authority), so certificate validation stays on.
-const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
-pool.on("error", (error) => console.error("Smooth Coach database pool error", error.message));
-
-const schemaFile = path.join(root, "deploy", "postgres", "smooth-coach-schema.sql");
-const schemaLockId = 7317204517;
+const pool = createPool(databaseUrl);
 
 const app = express();
 app.set("trust proxy", 1);
@@ -99,23 +92,6 @@ function requireUser(req, res, next) {
   if (!user) return res.status(401).json({ error: "Sign in is required for this private account data." });
   req.smoothCoachUser = user;
   next();
-}
-
-// Applies the idempotent, additive schema shared with deploy/postgres/setup-smooth-coach-postgres.sh.
-// The advisory lock keeps concurrently starting containers from applying it at the same time.
-async function ensureSchema() {
-  const schemaSql = await readFile(schemaFile, "utf8");
-  const client = await pool.connect();
-  try {
-    await client.query("SELECT pg_advisory_lock($1)", [schemaLockId]);
-    await client.query(schemaSql);
-    await client.query("SELECT pg_advisory_unlock($1)", [schemaLockId]);
-    client.release();
-  } catch (error) {
-    // Discarding the connection also rolls back the open transaction and drops the advisory lock.
-    client.release(true);
-    throw error;
-  }
 }
 
 function validCoachState(state) {
@@ -373,7 +349,7 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "Smooth Coach could not complete that request. Please try again." });
 });
 
-await ensureSchema();
+await ensureSchema(pool);
 
 if (isProduction) {
   const dist = path.join(root, "dist");

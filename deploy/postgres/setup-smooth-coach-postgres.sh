@@ -141,8 +141,8 @@ SQL
 # Applying the schema as the application role confirms its runtime privileges.
 run_app --file="$schema_file"
 
-expected_tables=5
-actual_table_count="$(run_app --tuples-only --no-align --command "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('user_profiles', 'user_coach_state', 'weight_entries', 'progress_photos', 'progress_photo_uploads');")"
+expected_tables=4
+actual_table_count="$(run_app --tuples-only --no-align --command "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('user_profiles', 'user_coach_state', 'weight_entries', 'progress_photos');")"
 if [[ "$actual_table_count" != "$expected_tables" ]]; then
   printf 'Schema verification failed: expected %s tables, found %s.\n' "$expected_tables" "$actual_table_count" >&2
   exit 1
