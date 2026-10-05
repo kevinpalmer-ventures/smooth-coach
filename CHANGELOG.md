@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-04
+
+### Fixed
+- The startup error for missing configuration now names which required environment variables are unset or empty (names only, never values).
+
 ## [2.0.0] - 2026-10-04
 
 ### Changed
