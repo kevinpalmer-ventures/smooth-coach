@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-10-05
+
+### Fixed
+- Startup no longer exits when the database is briefly unreachable. Transient connection errors (unreachable, refused, timed out, reset, DNS not ready, "database starting up") are retried every second for up to `DATABASE_STARTUP_TIMEOUT` seconds (optional, default 30), with a log line for each wait. This fixes a crash loop on macvlan networks, where the link needs a few seconds after the container starts. Wrong credentials, a missing database or an unknown host still fail immediately.
+- `docker-compose.yml` passes `DATABASE_STARTUP_TIMEOUT` to the app and pins image 3.0.1.
+
 ## [3.0.0] - 2026-10-05
 
 ### Added

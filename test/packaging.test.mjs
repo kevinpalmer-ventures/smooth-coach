@@ -38,7 +38,7 @@ describe("docker-compose.yml", () => {
   });
 
   it("pins images and starts the app after garage-init succeeds", () => {
-    assert.equal(config.services.app.image, "venturesconsulting/smooth-coach:3.0.0");
+    assert.equal(config.services.app.image, "venturesconsulting/smooth-coach:3.0.1");
     assert.equal(config.services.garage.image, "dxflrs/garage:v2.4.1");
     for (const service of Object.values(config.services)) assert.ok(!service.image.endsWith(":latest"), service.image);
     assert.equal(config.services.app.depends_on["garage-init"].condition, "service_completed_successfully");
