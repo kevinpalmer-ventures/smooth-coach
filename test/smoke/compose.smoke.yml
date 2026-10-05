@@ -1,0 +1,24 @@
+# Container smoke test: the locally built image, a throwaway PostgreSQL, and the fake OIDC
+# provider running inside the app container so its http:// issuer is a loopback address.
+services:
+  app:
+    image: smooth-coach:smoke
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:39556:39556"
+    volumes:
+      - ./test/helpers:/helpers:ro
+    command: ["sh", "-c", "node /helpers/fake-oidc-server.mjs & sleep 1 && exec node server/index.mjs"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: smoke-test
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
