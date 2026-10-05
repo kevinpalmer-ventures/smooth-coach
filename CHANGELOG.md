@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-04
+
 ### Changed
 - **BREAKING:** The server now uses PostgreSQL 14+ through the `pg` driver instead of MySQL. `DATABASE_URL` must be a `postgresql://` connection string; MySQL databases are no longer supported.
 - At startup the server applies `deploy/postgres/smooth-coach-schema.sql` (idempotent, additive) under an advisory lock instead of inline MySQL DDL. The Docker image now includes that file.
