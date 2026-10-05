@@ -15,7 +15,7 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 > 2. Use `deploy/postgres/setup-smooth-coach-postgres.sh` and `deploy/postgres/smooth-coach-schema.sql`. Obtain administrator and application passwords from the user’s secret manager or secure terminal input only.
 > 3. Set the database name and app role only if the user specifies alternatives; otherwise use `smooth_coach` and `smooth_coach_app`.
 > 4. Run the provisioning script once. It may create/alter only the named Smooth Coach role, database, schema objects, and privileges. Do not alter, delete, or inspect unrelated databases, roles, tables, or data.
-> 5. Verify exactly five application tables exist, and that the app role can connect using the required TLS settings. Never print passwords, full credential-bearing URLs, or admin credentials.
+> 5. Verify exactly four application tables exist, and that the app role can connect using the required TLS settings. Never print passwords, full credential-bearing URLs, or admin credentials.
 >
 > ### Required application migration
 > 6. Update the Smooth Coach server from `mysql2/promise` to the `pg` package and use `DATABASE_URL=postgresql://...` at runtime. Preserve SSL support; use the deployment provider’s certificate guidance instead of globally disabling certificate validation unless the provider explicitly requires it.
@@ -25,9 +25,9 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 >    - `DATE_FORMAT(date, '%Y-%m-%d')` → `to_char(date, 'YYYY-MM-DD')`
 >    - `DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 MINUTE)` → `CURRENT_TIMESTAMP + INTERVAL '15 minutes'`
 >    - `BIGINT AUTO_INCREMENT` is already represented by the provided PostgreSQL identity columns
->    - keep all account-scoping, foreign keys, upload-intent expiration, and photo type/size verification intact
+>    - keep all account-scoping, foreign keys, and photo type/size verification intact
 > 8. Do not mix the MySQL and PostgreSQL paths. After migration, remove the MySQL driver dependency and update any package lockfile.
-> 9. Start the app with a PostgreSQL `DATABASE_URL`; validate `/api/health`, schema initialization, sign-in-required endpoints, a saved coach state, a weight entry, and a photo-upload intent. Do not use production user data for testing.
+> 9. Start the app with a PostgreSQL `DATABASE_URL`; validate `/api/health`, schema initialization, sign-in-required endpoints, a saved coach state, a weight entry, and a photo upload. Do not use production user data for testing.
 > 10. Build the Docker image and publish a **new immutable version tag** only after validation. Do not overwrite `latest` without explicit user approval.
 >
 > ### Secrets and completion
@@ -77,6 +77,5 @@ chmod +x deploy/postgres/setup-smooth-coach-postgres.sh
 | `user_coach_state` | Daily coaching/check-in state |
 | `weight_entries` | Private weight timeline |
 | `progress_photos` | Private photo metadata and storage object keys |
-| `progress_photo_uploads` | Short-lived, app-authorized photo upload intents |
 
 The database stores only image metadata and private object keys; photo files remain in the application’s private object storage.

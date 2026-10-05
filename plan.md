@@ -8,9 +8,9 @@ Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a ca
 - A 10-day program map, recipe library, phase-based preparation list, and progress overview.
 - Two source-derived routine shapes: three smoothies, or breakfast/lunch smoothies plus a healthy dinner.
 - Browser notification opt-in for open-tab coaching nudges; it is clearly described as an in-app/open-tab feature rather than a guaranteed background reminder.
-- Manus account login with an authenticated application session. Signed-in users have their coaching check-ins stored under their account; a logged-out visitor can still read the source guide.
+- Sign-in with Google or any OpenID Connect provider, with an authenticated application session. Signed-in users have their coaching check-ins stored under their account; a logged-out visitor can still read the source guide.
 - A private weight tracker for signed-in users: add or update one weight per date, choose lb or kg on the first entry, see a chronological chart, the latest logged weight, and change from the first entry. Weight data is always queried and written only for the authenticated account.
-- A private progression-photo timeline for signed-in users: upload a JPEG, PNG, or WebP image up to 8 MB, choose its date, and optionally add a short caption. The browser uploads directly to a short-lived storage URL; the server records only the owned object key and returns a short-lived download URL only to that account.
+- A private progression-photo timeline for signed-in users: upload a JPEG, PNG, or WebP image up to 8 MB, choose its date, and optionally add a short caption. The browser sends the picture to the server, which checks its file signature, stores it in the private Garage bucket, and serves it back only to that account through an authenticated image route.
 - A clear medical/safety context explaining that this is an organizer for a supplied source, not medical advice, and deliberately not operationalizing the source's colon-cleansing/bowel-movement instruction.
 
 ## Design direction — Soft Orchard Ritual
@@ -28,7 +28,7 @@ Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a ca
 - **Signature brand color:** Orchard Sage `#789B7B`.
 
 ## Architecture
-React + TypeScript + Vite provide the browser experience. An Express server hosts the Vite development middleware and production static bundle, exposes authenticated APIs, and uses Manus OAuth for real account login. A PostgreSQL 14+ database (via the `pg` driver and `DATABASE_URL`) holds `user_profiles`, `user_coach_state`, `weight_entries`, `progress_photos`, and `progress_photo_uploads`; managed object storage holds the private photo bytes. Account sessions use the required `webdev_app_session` cookie, HS256 JWT validation, a single-use OAuth nonce, `SameSite=None; Secure` cookie settings for Preview, and an account-scoped `open_id` on every database query. At startup the server applies the idempotent, additive `deploy/postgres/smooth-coach-schema.sql` under an advisory lock; no destructive database operation is used.
+React + TypeScript + Vite provide the browser experience. An Express server hosts the Vite development middleware and production static bundle, exposes authenticated APIs, and signs users in through any OpenID Connect provider (Google by default) using `openid-client` with PKCE, state, nonce, and verified ID-token signatures. A PostgreSQL 14+ database (via the `pg` driver and `DATABASE_URL`) holds `user_profiles`, `user_coach_state`, `weight_entries`, and `progress_photos`; a self-hosted Garage bucket on the internal Docker network holds the private photo bytes, which only ever pass through the app server. Account sessions use the `smooth_coach_session` cookie (HS256 JWT, `HttpOnly`, `Secure`, `SameSite=Lax`), and every database query is scoped to the account ID (`issuer|subject`) stored in `open_id`. At startup the server validates its configuration, applies the idempotent, additive `deploy/postgres/smooth-coach-schema.sql` under an advisory lock, loads the sign-in provider's configuration, and checks the photo bucket; no destructive database operation is used.
 
 ## Project structure
 | Path | Responsibility |
@@ -38,10 +38,15 @@ React + TypeScript + Vite provide the browser experience. An Express server host
 | `src/WeightTracker.tsx` | Account-scoped weight entry, summary, and visual timeline. |
 | `src/ProgressPhotos.tsx` | Account-scoped picture upload form and dated visual timeline. |
 | `src/types.ts` | Shared client models for coaching state, account identity, weight records, and progress photos. |
-| `server/index.mjs` | OAuth flow, validated session handling, database/storage initialization, private media APIs, and static/dev serving. |
+| `server/index.mjs` | Startup sequence, coaching, weight, and private photo APIs, and static/dev serving. |
+| `server/config.mjs` | Environment validation that names missing or invalid settings without printing values. |
+| `server/auth.mjs` | OpenID Connect sign-in and the application session cookie. |
+| `server/db.mjs` | PostgreSQL pool and startup schema application. |
+| `server/photoStorage.mjs` | Private S3-compatible photo storage and image signature checks. |
+| `docker-compose.yml` | Self-hosted deployment: app, Garage, and Garage setup. |
+| `deploy/garage/` | Garage configuration and idempotent setup script. |
 | `src/styles.css` | Soft Orchard Ritual tokens, layouts, responsive behavior, and accessible states. |
 | `Dockerfile` | Production container build for the server-backed site. |
-| `public/manus-routes.json` | Declares the single browser route. |
 
 ## Material constraints
 The health-related source is displayed as user-supplied material. The interface distinguishes source claims from medical instruction, adds a concise safety note, and avoids giving operational colon-cleansing or bowel-movement advice. Weight and progression photos are personal health information: each is private to the signed-in user, is never included in public pages, and is described as a simple self-record rather than a clinical assessment.
