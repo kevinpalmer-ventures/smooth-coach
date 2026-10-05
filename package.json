@@ -7,7 +7,10 @@
   "scripts": {
     "dev": "node server/index.mjs",
     "build": "tsc --noEmit && vite build",
-    "start": "node server/index.mjs"
+    "start": "node server/index.mjs",
+    "test": "node --test",
+    "test:stack:up": "docker compose -f test/compose.yml up -d",
+    "test:stack:down": "docker compose -f test/compose.yml down -v"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
