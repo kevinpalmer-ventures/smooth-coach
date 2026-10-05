@@ -24,6 +24,7 @@
 - Conventional Commits; every commit message ends with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Work on branch `feat/self-hosting`; nothing is pushed to the remote or Docker Hub without the user's explicit confirmation.
 - Integration tests need the test stack: `npm run test:stack:up` (Docker). Unit tests run without it.
+- `npm test` runs `node --test "test/*.test.mjs"` (explicit glob). A bare `node --test` would also run every `.mjs` under `test/` (helpers, smoke script) as test files on Node 22+.
 
 ## File Structure
 
@@ -84,7 +85,7 @@ Replace the `"scripts"` block with:
     "dev": "node server/index.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test",
+    "test": "node --test \"test/*.test.mjs\"",
     "test:stack:up": "docker compose -f test/compose.yml up -d",
     "test:stack:down": "docker compose -f test/compose.yml down -v"
   },
@@ -301,6 +302,16 @@ git commit -m "feat: add validated configuration module" -m "Co-Authored-By: Cla
   - `deploy/garage/setup.mjs`: `setupVariables: string[]`; `missingSetupVariables(env) → string[]`; `parseCapacity(value) → number` (bytes, powers of 1000); `runSetup({ adminUrl, adminToken, bucket, accessKeyId, secretAccessKey, capacity = "10G", log = console.log, retries = 30, retryDelayMs = 2000 }) → Promise<void>`.
   - `server/photoStorage.mjs`: `photoTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }`; `sniffImageType(buffer) → "image/jpeg" | "image/png" | "image/webp" | null`; `contentTypeForKey(key) → string`; `describeBucketError(error, bucket) → string`; `class PhotoStorageError extends Error`; `createPhotoStorage({ endpoint, region, bucket, accessKeyId, secretAccessKey, forcePathStyle }) → { checkBucket(), putPhoto(key, body, contentType), getPhotoStream(key) /* Readable | null */, deletePhoto(key), destroy() }`.
   - `test/helpers/stack.mjs`: `stack` (frozen: `adminDatabaseUrl`, `garageAdminUrl`, `garageAdminToken`, `s3` config object); `waitForStack(timeoutMs = 90000)`; `createTestDatabase() → { databaseUrl, drop() }`.
+
+- [ ] **Step 0: Restrict `npm test` to test files** (plan amendment after Task 1)
+
+In `package.json`, replace `"test": "node --test",` with:
+
+```json
+    "test": "node --test \"test/*.test.mjs\"",
+```
+
+Run `npm test` and confirm only `test/config.test.mjs` runs (14 tests pass). Include `package.json` in this task's commit.
 
 - [ ] **Step 1: Install the S3 client**
 
