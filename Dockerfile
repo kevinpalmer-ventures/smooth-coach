@@ -12,6 +12,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+COPY --from=build /app/deploy/postgres/smooth-coach-schema.sql ./deploy/postgres/smooth-coach-schema.sql
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

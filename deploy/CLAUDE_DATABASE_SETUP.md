@@ -1,6 +1,6 @@
 # Claude handoff — Smooth Coach PostgreSQL setup and driver migration
 
-> **Important:** the current published `venturesconsulting/smooth-coach:latest` image uses the `mysql2` driver and MySQL SQL syntax. It will **not** connect to PostgreSQL as-is. The setup below prepares PostgreSQL; Claude must also migrate the Node server to `pg`, validate it against PostgreSQL, build a new image, and publish a new tag before deployment.
+> **Status:** the application migration (steps 6–9 below) is done in the repository: the server uses `pg`, applies `deploy/postgres/smooth-coach-schema.sql` at startup, and was validated against PostgreSQL 16. Images published **before** that change (including the old `venturesconsulting/smooth-coach:latest`) still use `mysql2` and will **not** connect to PostgreSQL — deploy an image built from the migrated source.
 
 Attach the two files in `deploy/postgres/` to Claude Code (or place them in the repository), then paste the prompt below.
 
@@ -34,8 +34,10 @@ Attach the two files in `deploy/postgres/` to Claude Code (or place them in the 
 > 11. Store the app connection string in the deployment secret manager in this form, URL-encoding the role/password as needed:
 >
 >     ```text
->     postgresql://SMOOTH_COACH_DB_USER:URL_ENCODED_PASSWORD@PG_ADMIN_HOST:5432/SMOOTH_COACH_DATABASE?sslmode=require
+>     postgresql://SMOOTH_COACH_DB_USER:URL_ENCODED_PASSWORD@PG_ADMIN_HOST:5432/SMOOTH_COACH_DATABASE?sslmode=verify-full
 >     ```
+>
+>     TLS is controlled entirely by this URL. `sslmode=verify-full` validates the server certificate against the system CAs. If the provider signs with its own CA (for example the RDS bundle), mount that PEM file into the container and add `&sslrootcert=/path/to/ca.pem`. Use `sslmode=no-verify` only if the provider explicitly requires it.
 >
 > 12. Report only: database host, port, database name, app role, schema verification result, migration/test status, and the new image tag/digest if one is published.
 

@@ -134,8 +134,8 @@ SQL
 # Give the app role only access to its database and the public schema. It owns the
 # tables created by the schema script and therefore needs no global privileges.
 run_admin --dbname="$database" <<SQL
-GRANT CONNECT, TEMPORARY ON DATABASE \"$database\" TO \"$app_user\";
-GRANT USAGE, CREATE ON SCHEMA public TO \"$app_user\";
+GRANT CONNECT, TEMPORARY ON DATABASE "$database" TO "$app_user";
+GRANT USAGE, CREATE ON SCHEMA public TO "$app_user";
 SQL
 
 # Applying the schema as the application role confirms its runtime privileges.

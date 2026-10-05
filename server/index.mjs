@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import express from "express";
 import jwt from "jsonwebtoken";
-import mysql from "mysql2/promise";
+import pg from "pg";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -24,12 +25,13 @@ if (!projectId || !oauthPortalUrl || !oauthApiUrl || !jwtSecret || !databaseUrl 
   throw new Error("Smooth Coach requires the managed OAuth, session, database, and storage environment variables.");
 }
 
-const pool = mysql.createPool({
-  uri: databaseUrl,
-  waitForConnections: true,
-  connectionLimit: 6,
-  ssl: { rejectUnauthorized: false }
-});
+// TLS is configured through DATABASE_URL (sslmode=verify-full, plus sslrootcert=/path/to/ca.pem
+// when the provider uses its own certificate authority), so certificate validation stays on.
+const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
+pool.on("error", (error) => console.error("Smooth Coach database pool error", error.message));
+
+const schemaFile = path.join(root, "deploy", "postgres", "smooth-coach-schema.sql");
+const schemaLockId = 7317204517;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -81,10 +83,10 @@ function sessionFromRequest(req) {
 }
 
 async function upsertUser(user) {
-  await pool.execute(
+  await pool.query(
     `INSERT INTO user_profiles (open_id, display_name, email)
-     VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), email = VALUES(email)`,
+     VALUES ($1, $2, $3)
+     ON CONFLICT (open_id) DO UPDATE SET display_name = EXCLUDED.display_name, email = EXCLUDED.email`,
     [user.openId, user.name, user.email]
   );
 }
@@ -96,52 +98,21 @@ function requireUser(req, res, next) {
   next();
 }
 
+// Applies the idempotent, additive schema shared with deploy/postgres/setup-smooth-coach-postgres.sh.
+// The advisory lock keeps concurrently starting containers from applying it at the same time.
 async function ensureSchema() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS user_profiles (
-    open_id VARCHAR(255) PRIMARY KEY,
-    display_name VARCHAR(255) NOT NULL,
-    email VARCHAR(320) NOT NULL DEFAULT '',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS user_coach_state (
-    open_id VARCHAR(255) PRIMARY KEY,
-    state_json JSON NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_coach_state_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS weight_entries (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    open_id VARCHAR(255) NOT NULL,
-    weight DECIMAL(7,2) NOT NULL,
-    unit ENUM('lb', 'kg') NOT NULL,
-    logged_at DATE NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_weight_per_day (open_id, logged_at),
-    KEY weight_entries_user_date (open_id, logged_at),
-    CONSTRAINT fk_weight_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS progress_photos (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    open_id VARCHAR(255) NOT NULL,
-    storage_key VARCHAR(700) NOT NULL UNIQUE,
-    captured_at DATE NOT NULL,
-    caption VARCHAR(160) NOT NULL DEFAULT '',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    KEY progress_photos_user_date (open_id, captured_at),
-    CONSTRAINT fk_progress_photo_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
-  )`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS progress_photo_uploads (
-    storage_key VARCHAR(700) PRIMARY KEY,
-    open_id VARCHAR(255) NOT NULL,
-    content_type VARCHAR(50) NOT NULL,
-    declared_size INT UNSIGNED NOT NULL,
-    expires_at DATETIME NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    KEY progress_photo_uploads_owner (open_id, expires_at),
-    CONSTRAINT fk_progress_photo_upload_user FOREIGN KEY (open_id) REFERENCES user_profiles(open_id) ON DELETE CASCADE
-  )`);
+  const schemaSql = await readFile(schemaFile, "utf8");
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [schemaLockId]);
+    await client.query(schemaSql);
+    await client.query("SELECT pg_advisory_unlock($1)", [schemaLockId]);
+    client.release();
+  } catch (error) {
+    // Discarding the connection also rolls back the open transaction and drops the advisory lock.
+    client.release(true);
+    throw error;
+  }
 }
 
 function validCoachState(state) {
@@ -268,7 +239,7 @@ app.get("/api/auth/me", async (req, res, next) => {
 app.get("/api/coach-state", requireUser, async (req, res, next) => {
   try {
     await upsertUser(req.smoothCoachUser);
-    const [rows] = await pool.execute("SELECT state_json AS stateJson FROM user_coach_state WHERE open_id = ?", [req.smoothCoachUser.openId]);
+    const { rows } = await pool.query(`SELECT state_json AS "stateJson" FROM user_coach_state WHERE open_id = $1`, [req.smoothCoachUser.openId]);
     const stateJson = rows[0]?.stateJson;
     const coachState = typeof stateJson === "string" ? JSON.parse(stateJson) : stateJson;
     res.json({ coachState: validCoachState(coachState) ? coachState : null });
@@ -281,9 +252,9 @@ app.put("/api/coach-state", requireUser, async (req, res, next) => {
   try {
     if (!validCoachState(req.body?.coachState)) return res.status(400).json({ error: "The coaching state was invalid." });
     await upsertUser(req.smoothCoachUser);
-    await pool.execute(
-      `INSERT INTO user_coach_state (open_id, state_json) VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE state_json = VALUES(state_json)`,
+    await pool.query(
+      `INSERT INTO user_coach_state (open_id, state_json) VALUES ($1, $2::jsonb)
+       ON CONFLICT (open_id) DO UPDATE SET state_json = EXCLUDED.state_json`,
       [req.smoothCoachUser.openId, JSON.stringify(req.body.coachState)]
     );
     res.status(204).end();
@@ -295,8 +266,8 @@ app.put("/api/coach-state", requireUser, async (req, res, next) => {
 app.get("/api/weights", requireUser, async (req, res, next) => {
   try {
     await upsertUser(req.smoothCoachUser);
-    const [rows] = await pool.execute(
-      "SELECT id, weight, unit, DATE_FORMAT(logged_at, '%Y-%m-%d') AS loggedAt FROM weight_entries WHERE open_id = ? ORDER BY logged_at ASC, id ASC",
+    const { rows } = await pool.query(
+      `SELECT id, weight, unit, to_char(logged_at, 'YYYY-MM-DD') AS "loggedAt" FROM weight_entries WHERE open_id = $1 ORDER BY logged_at ASC, id ASC`,
       [req.smoothCoachUser.openId]
     );
     res.json({ weights: mapWeights(rows) });
@@ -314,15 +285,15 @@ app.post("/api/weights", requireUser, async (req, res, next) => {
       return res.status(400).json({ error: "Enter a positive weight, a valid date, and lb or kg." });
     }
     await upsertUser(req.smoothCoachUser);
-    const [existing] = await pool.execute("SELECT unit FROM weight_entries WHERE open_id = ? LIMIT 1", [req.smoothCoachUser.openId]);
+    const { rows: existing } = await pool.query("SELECT unit FROM weight_entries WHERE open_id = $1 LIMIT 1", [req.smoothCoachUser.openId]);
     if (existing[0] && existing[0].unit !== unit) return res.status(400).json({ error: `Use ${existing[0].unit} to keep this account's timeline consistent.` });
-    await pool.execute(
-      `INSERT INTO weight_entries (open_id, weight, unit, logged_at) VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE weight = VALUES(weight), unit = VALUES(unit), updated_at = CURRENT_TIMESTAMP`,
+    await pool.query(
+      `INSERT INTO weight_entries (open_id, weight, unit, logged_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (open_id, logged_at) DO UPDATE SET weight = EXCLUDED.weight, unit = EXCLUDED.unit, updated_at = CURRENT_TIMESTAMP`,
       [req.smoothCoachUser.openId, numericWeight, unit, loggedAt]
     );
-    const [rows] = await pool.execute(
-      "SELECT id, weight, unit, DATE_FORMAT(logged_at, '%Y-%m-%d') AS loggedAt FROM weight_entries WHERE open_id = ? ORDER BY logged_at ASC, id ASC",
+    const { rows } = await pool.query(
+      `SELECT id, weight, unit, to_char(logged_at, 'YYYY-MM-DD') AS "loggedAt" FROM weight_entries WHERE open_id = $1 ORDER BY logged_at ASC, id ASC`,
       [req.smoothCoachUser.openId]
     );
     res.status(201).json({ weights: mapWeights(rows) });
@@ -334,8 +305,8 @@ app.post("/api/weights", requireUser, async (req, res, next) => {
 app.get("/api/progress-photos", requireUser, async (req, res, next) => {
   try {
     await upsertUser(req.smoothCoachUser);
-    const [rows] = await pool.execute(
-      "SELECT id, storage_key AS storageKey, DATE_FORMAT(captured_at, '%Y-%m-%d') AS capturedAt, caption FROM progress_photos WHERE open_id = ? ORDER BY captured_at ASC, id ASC",
+    const { rows } = await pool.query(
+      `SELECT id, storage_key AS "storageKey", to_char(captured_at, 'YYYY-MM-DD') AS "capturedAt", caption FROM progress_photos WHERE open_id = $1 ORDER BY captured_at ASC, id ASC`,
       [req.smoothCoachUser.openId]
     );
     res.json({ photos: await mapProgressPhotos(rows) });
@@ -353,8 +324,8 @@ app.post("/api/progress-photos/presign", requireUser, async (req, res, next) => 
     await upsertUser(req.smoothCoachUser);
     const prefix = photoPrefixFor(req.smoothCoachUser.openId);
     const key = `${prefix}/${capturedAt}/${crypto.randomUUID()}.${photoExtensions[contentType]}`;
-    await pool.execute(
-      "INSERT INTO progress_photo_uploads (storage_key, open_id, content_type, declared_size, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 MINUTE))",
+    await pool.query(
+      "INSERT INTO progress_photo_uploads (storage_key, open_id, content_type, declared_size, expires_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '15 minutes')",
       [key, req.smoothCoachUser.openId, contentType, size]
     );
     const uploadUrl = await storagePresign("put", key);
@@ -373,19 +344,19 @@ app.post("/api/progress-photos", requireUser, async (req, res, next) => {
       return res.status(400).json({ error: "That picture record was not valid." });
     }
     await upsertUser(req.smoothCoachUser);
-    const [pendingUploads] = await pool.execute(
-      "SELECT content_type AS contentType, declared_size AS declaredSize FROM progress_photo_uploads WHERE storage_key = ? AND open_id = ? AND expires_at > UTC_TIMESTAMP()",
+    const { rows: pendingUploads } = await pool.query(
+      `SELECT content_type AS "contentType", declared_size AS "declaredSize" FROM progress_photo_uploads WHERE storage_key = $1 AND open_id = $2 AND expires_at > CURRENT_TIMESTAMP`,
       [key, req.smoothCoachUser.openId]
     );
     if (!pendingUploads[0]) return res.status(400).json({ error: "This upload was not approved or has expired. Choose the picture again." });
     await verifyUploadedPhoto(key, pendingUploads[0].contentType, Number(pendingUploads[0].declaredSize));
-    await pool.execute(
-      "INSERT INTO progress_photos (open_id, storage_key, captured_at, caption) VALUES (?, ?, ?, ?)",
+    await pool.query(
+      "INSERT INTO progress_photos (open_id, storage_key, captured_at, caption) VALUES ($1, $2, $3, $4)",
       [req.smoothCoachUser.openId, key, capturedAt, safeCaption]
     );
-    await pool.execute("DELETE FROM progress_photo_uploads WHERE storage_key = ? AND open_id = ?", [key, req.smoothCoachUser.openId]);
-    const [rows] = await pool.execute(
-      "SELECT id, storage_key AS storageKey, DATE_FORMAT(captured_at, '%Y-%m-%d') AS capturedAt, caption FROM progress_photos WHERE open_id = ? ORDER BY captured_at ASC, id ASC",
+    await pool.query("DELETE FROM progress_photo_uploads WHERE storage_key = $1 AND open_id = $2", [key, req.smoothCoachUser.openId]);
+    const { rows } = await pool.query(
+      `SELECT id, storage_key AS "storageKey", to_char(captured_at, 'YYYY-MM-DD') AS "capturedAt", caption FROM progress_photos WHERE open_id = $1 ORDER BY captured_at ASC, id ASC`,
       [req.smoothCoachUser.openId]
     );
     res.status(201).json({ photos: await mapProgressPhotos(rows) });

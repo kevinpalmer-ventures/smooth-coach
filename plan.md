@@ -28,7 +28,7 @@ Smooth Coach turns the supplied 10-Day Green Smoothie Cleanse document into a ca
 - **Signature brand color:** Orchard Sage `#789B7B`.
 
 ## Architecture
-React + TypeScript + Vite provide the browser experience. An Express server hosts the Vite development middleware and production static bundle, exposes authenticated APIs, and uses Manus OAuth for real account login. A managed MySQL-compatible database holds `user_profiles`, `user_coach_state`, `weight_entries`, and `progress_photos`; managed object storage holds the private photo bytes. Account sessions use the required `webdev_app_session` cookie, HS256 JWT validation, a single-use OAuth nonce, `SameSite=None; Secure` cookie settings for Preview, and an account-scoped `open_id` on every database query. The server creates only additive tables at startup; no destructive database operation is used.
+React + TypeScript + Vite provide the browser experience. An Express server hosts the Vite development middleware and production static bundle, exposes authenticated APIs, and uses Manus OAuth for real account login. A PostgreSQL 14+ database (via the `pg` driver and `DATABASE_URL`) holds `user_profiles`, `user_coach_state`, `weight_entries`, `progress_photos`, and `progress_photo_uploads`; managed object storage holds the private photo bytes. Account sessions use the required `webdev_app_session` cookie, HS256 JWT validation, a single-use OAuth nonce, `SameSite=None; Secure` cookie settings for Preview, and an account-scoped `open_id` on every database query. At startup the server applies the idempotent, additive `deploy/postgres/smooth-coach-schema.sql` under an advisory lock; no destructive database operation is used.
 
 ## Project structure
 | Path | Responsibility |
