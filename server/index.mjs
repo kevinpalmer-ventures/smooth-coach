@@ -1,11 +1,13 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import express from "express";
+import multer from "multer";
 import { createAuth } from "./auth.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { createPool, ensureSchema } from "./db.mjs";
-import { createPhotoStorage } from "./photoStorage.mjs";
+import { contentTypeForKey, createPhotoStorage, photoTypes, sniffImageType } from "./photoStorage.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -108,6 +110,75 @@ app.post("/api/weights", requireUser, async (req, res, next) => {
     );
     const { rows } = await pool.query(selectWeights, [req.smoothCoachUser.openId]);
     res.status(201).json({ weights: mapWeights(rows) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const maxPhotoBytes = 8 * 1024 * 1024;
+const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxPhotoBytes, files: 1, fields: 2, fieldSize: 1024 } }).single("photo");
+const photoKeyPrefix = (openId) => `progress-photos/${crypto.createHash("sha256").update(openId).digest("hex").slice(0, 32)}`;
+
+function receivePhoto(req, res, next) {
+  photoUpload(req, res, (error) => {
+    if (!error) return next();
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Choose a dated JPEG, PNG, or WebP image up to 8 MB." });
+    if (error instanceof multer.MulterError) return res.status(400).json({ error: "That picture upload was not valid." });
+    next(error);
+  });
+}
+
+async function listPhotos(openId) {
+  const { rows } = await pool.query(
+    `SELECT id, to_char(captured_at, 'YYYY-MM-DD') AS "capturedAt", caption FROM progress_photos WHERE open_id = $1 ORDER BY captured_at ASC, id ASC`,
+    [openId]
+  );
+  return rows.map((row) => ({ id: Number(row.id), capturedAt: row.capturedAt, caption: row.caption, imageUrl: `/api/progress-photos/${row.id}/image` }));
+}
+
+app.get("/api/progress-photos", requireUser, async (req, res, next) => {
+  try {
+    res.json({ photos: await listPhotos(req.smoothCoachUser.openId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/progress-photos", requireUser, receivePhoto, async (req, res, next) => {
+  try {
+    const { openId } = req.smoothCoachUser;
+    const contentType = req.file ? sniffImageType(req.file.buffer) : null;
+    if (!contentType) return res.status(400).json({ error: "Choose a JPEG, PNG, or WebP image up to 8 MB." });
+    const { capturedAt, caption } = req.body ?? {};
+    const safeCaption = typeof caption === "string" ? caption.trim() : "";
+    if (!isRealDate(capturedAt) || safeCaption.length > 160) return res.status(400).json({ error: "That picture record was not valid." });
+    const key = `${photoKeyPrefix(openId)}/${capturedAt}/${crypto.randomUUID()}.${photoTypes[contentType]}`;
+    await photoStorage.putPhoto(key, req.file.buffer, contentType);
+    try {
+      await pool.query("INSERT INTO progress_photos (open_id, storage_key, captured_at, caption) VALUES ($1, $2, $3, $4)", [openId, key, capturedAt, safeCaption]);
+    } catch (error) {
+      await photoStorage.deletePhoto(key).catch((cleanupError) => console.error("Smooth Coach photo cleanup failed", cleanupError.message));
+      throw error;
+    }
+    res.status(201).json({ photos: await listPhotos(openId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/progress-photos/:id/image", requireUser, async (req, res, next) => {
+  try {
+    if (!/^[1-9]\d{0,17}$/.test(req.params.id)) return res.status(404).json({ error: "Picture not found." });
+    const { rows } = await pool.query(`SELECT storage_key AS "storageKey" FROM progress_photos WHERE id = $1 AND open_id = $2`, [req.params.id, req.smoothCoachUser.openId]);
+    if (!rows[0]) return res.status(404).json({ error: "Picture not found." });
+    const stream = await photoStorage.getPhotoStream(rows[0].storageKey);
+    if (!stream) return res.status(404).json({ error: "Picture not found." });
+    res.set({ "content-type": contentTypeForKey(rows[0].storageKey), "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" });
+    stream.on("error", (error) => {
+      console.error("Smooth Coach photo storage stream failed", error.message);
+      res.destroy(error);
+    });
+    stream.pipe(res);
   } catch (error) {
     next(error);
   }

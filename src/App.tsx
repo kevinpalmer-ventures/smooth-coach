@@ -153,15 +153,14 @@ function App() {
     setWeights(payload.weights ?? []);
   };
   const handlePhotoUpload = async (input: { file: File; capturedAt: string; caption: string }) => {
-    const presignResponse = await fetch("/api/progress-photos/presign", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ contentType: input.file.type, size: input.file.size, capturedAt: input.capturedAt }) });
-    const presignPayload = await presignResponse.json() as { error?: string; uploadUrl?: string; key?: string };
-    if (!presignResponse.ok || !presignPayload.uploadUrl || !presignPayload.key) throw new Error(presignPayload.error ?? "Unable to prepare this picture upload.");
-    const uploadResponse = await fetch(presignPayload.uploadUrl, { method: "PUT", headers: { "content-type": input.file.type }, body: input.file });
-    if (!uploadResponse.ok) throw new Error("The picture could not be uploaded. Please try again.");
-    const recordResponse = await fetch("/api/progress-photos", { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ key: presignPayload.key, capturedAt: input.capturedAt, caption: input.caption }) });
-    const recordPayload = await recordResponse.json() as { error?: string; photos?: ProgressPhoto[] };
-    if (!recordResponse.ok) throw new Error(recordPayload.error ?? "The picture uploaded but could not be added to your timeline.");
-    setPhotos(recordPayload.photos ?? []);
+    const form = new FormData();
+    form.append("capturedAt", input.capturedAt);
+    form.append("caption", input.caption);
+    form.append("photo", input.file);
+    const response = await fetch("/api/progress-photos", { method: "POST", credentials: "same-origin", body: form });
+    const payload = await response.json().catch(() => ({})) as { error?: string; photos?: ProgressPhoto[] };
+    if (!response.ok) throw new Error(payload.error ?? (response.status === 413 ? "That picture is larger than the server accepts. Choose an image up to 8 MB." : "The picture could not be added. Please try again."));
+    setPhotos(payload.photos ?? []);
   };
   const handleReminderToggle = async () => {
     if (state.reminders) { setState((current) => ({ ...current, reminders: false })); setReminderMessage("Nudges are off. You can switch them on any time."); return; }
