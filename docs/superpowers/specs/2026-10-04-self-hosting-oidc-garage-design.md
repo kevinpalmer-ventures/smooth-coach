@@ -98,14 +98,15 @@ MinIO was the original storage choice, but the MinIO community edition is unmain
 
 ### Discovery
 
-`openid-client`'s `discovery()` loads provider metadata from `OIDC_ISSUER` with the client ID and secret (client authentication `client_secret_basic` or as advertised). `allowInsecureRequests` is applied **only** when the issuer URL is `http:` on a loopback host, which enables the local fake provider in tests and local development; any other `http:` issuer is rejected at startup.
+`openid-client`'s `discovery()` loads provider metadata from `OIDC_ISSUER` with the client ID and secret (the library's default client authentication). `enableNonRepudiationChecks` is always applied, so ID token signatures are verified against the provider's JWKS. Without it, `openid-client` accepts unverified signatures on ID tokens received directly from the token endpoint (OIDC permits relying on TLS there); a prototype confirmed a token signed by an unknown key was accepted until this was enabled. `allowInsecureRequests` is applied **only** when the issuer URL is `http:` on a loopback host, which enables the local fake provider in tests and local development; any other `http:` issuer is rejected at startup.
 
 ### Routes
 
 - **`GET /api/auth/login`** — generates a PKCE code verifier, `state`, and `nonce` with `openid-client` helpers. Stores them in the **login cookie** `smooth_coach_login`: an HS256 JWT signed with `SESSION_SECRET`, 10-minute expiry, `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/api/auth`. Redirects to the provider's authorization URL with `response_type=code`, `scope=openid email profile`, `redirect_uri=APP_URL/api/auth/callback`, `code_challenge_method=S256`, the challenge, `state`, and `nonce`.
 - **`GET /api/auth/callback`** — reads and verifies the login cookie, clears it, then calls `authorizationCodeGrant()` with the current URL built from `APP_URL` + the request path and query (never from request `Host` headers), the PKCE verifier, `expectedState`, and `expectedNonce`. The library validates the ID token signature, `iss`, `aud`, `exp`, and nonce. On any failure (missing/expired/forged login cookie, state mismatch, provider error, token validation failure) it responds `400` with the existing message "The sign-in request could not be verified. Return to Smooth Coach and try again." and logs the reason without tokens. On success it upserts the profile, sets the session cookie, and redirects to `/`.
 - **`POST /api/auth/logout`** — clears the session cookie; `204`.
-- **`GET /api/auth/me`** — `200 { user }` with a valid session, else `401` (unchanged contract).
+- **`GET /api/auth/me`** — `200 { user }` with a valid session (and upserts the profile, as today), else `401` (unchanged contract).
+- **`requireUser`** — verifies the session cookie only and performs no database write (2.x upserted the profile on every protected request; the profile is now written at sign-in and by `/me`, which the app calls on every load).
 
 ### Account identity and profile
 
