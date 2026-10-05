@@ -21,8 +21,11 @@ const databaseUrl = process.env.DATABASE_URL;
 const manusApiUrl = process.env.MANUS_API_URL;
 const manusApiKey = process.env.MANUS_API_KEY;
 
-if (!projectId || !oauthPortalUrl || !oauthApiUrl || !jwtSecret || !databaseUrl || !manusApiUrl || !manusApiKey) {
-  throw new Error("Smooth Coach requires the managed OAuth, session, database, and storage environment variables.");
+// Name only the missing variables, never their values.
+const requiredEnv = ["MANUS_PROJECT_ID", "MANUS_OAUTH_PORTAL_URL", "MANUS_OAUTH_API_URL", "MANUS_JWT_SECRET", "DATABASE_URL", "MANUS_API_URL", "MANUS_API_KEY"];
+const missingEnv = requiredEnv.filter((name) => !process.env[name]);
+if (missingEnv.length) {
+  throw new Error(`Smooth Coach requires the managed OAuth, session, database, and storage environment variables. Missing: ${missingEnv.join(", ")}`);
 }
 
 // TLS is configured through DATABASE_URL (sslmode=verify-full, plus sslrootcert=/path/to/ca.pem
