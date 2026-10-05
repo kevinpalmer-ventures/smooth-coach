@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `.env.example` documenting every environment variable, where each value comes from, and how to pass them to the container.
+
+### Security
+- `*.env` files (such as `smooth-coach.env`) are now ignored by git and excluded from Docker build contexts; previously only `.env` and `.env.*` were.
+
 ## [2.0.1] - 2026-10-04
 
 ### Fixed
