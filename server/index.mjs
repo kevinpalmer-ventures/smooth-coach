@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -174,11 +175,9 @@ app.get("/api/progress-photos/:id/image", requireUser, async (req, res, next) =>
     const stream = await photoStorage.getPhotoStream(rows[0].storageKey);
     if (!stream) return res.status(404).json({ error: "Picture not found." });
     res.set({ "content-type": contentTypeForKey(rows[0].storageKey), "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" });
-    stream.on("error", (error) => {
-      console.error("Smooth Coach photo storage stream failed", error.message);
-      res.destroy(error);
+    pipeline(stream, res, (error) => {
+      if (error && error.code !== "ERR_STREAM_PREMATURE_CLOSE") console.error("Smooth Coach photo storage stream failed", error.message);
     });
-    stream.pipe(res);
   } catch (error) {
     next(error);
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { after, before, describe, it } from "node:test";
 import { DeleteObjectCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
@@ -119,6 +120,51 @@ describe("progress photos API", () => {
     assert.equal(response.status, 500);
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: stack.s3.bucket, Prefix: photoPrefix(provider.issuer, "carol") }));
     assert.equal(listing.KeyCount, 0);
+  });
+
+  describe("image downloads through a storage proxy", () => {
+    const largePhoto = Buffer.concat([images.png, Buffer.alloc(7 * 1024 * 1024, 7)]);
+
+    // Starts a server whose storage traffic goes through a closable proxy and uploads one large photo.
+    async function withProxiedServer(sub, run) {
+      const proxy = await startTcpProxy(Number(new URL(stack.s3.endpoint).port));
+      let proxied;
+      try {
+        proxied = await startServer(baseEnv({ databaseUrl: database.databaseUrl, provider, port: await freePort(), s3: { ...stack.s3, endpoint: `http://127.0.0.1:${proxy.port}` } }));
+        const { cookie } = await signIn(proxied, provider, { sub, name: sub });
+        const response = await api(proxied, "/api/progress-photos", { cookie, method: "POST", form: photoForm({ bytes: largePhoto, capturedAt: "2026-09-10" }) });
+        assert.equal(response.status, 201, JSON.stringify(response.data));
+        await run({ proxy, proxied, cookie, imageUrl: response.data.photos.at(-1).imageUrl });
+      } finally {
+        await proxied?.stop();
+        await proxy.close();
+      }
+    }
+
+    it("ends the response early instead of hanging when storage fails mid-download", () => withProxiedServer("frank", async ({ proxy, proxied, cookie, imageUrl }) => {
+      const response = await fetch(`${proxied.url}${imageUrl}`, { headers: { cookie }, signal: AbortSignal.timeout(15000) });
+      assert.equal(response.status, 200);
+      await proxy.close();
+      const outcome = await response.arrayBuffer().then((body) => ({ length: body.byteLength }), (error) => ({ error }));
+      assert.ok(outcome.error || outcome.length < largePhoto.length, "the body must not arrive complete after storage went away");
+      assert.notEqual(outcome.error?.name, "TimeoutError", "the download must not hang");
+      await delay(200);
+      assert.match(proxied.output(), /photo storage stream failed/);
+    }));
+
+    it("releases the storage connection when the client aborts", () => withProxiedServer("grace", async ({ proxy, proxied, cookie, imageUrl }) => {
+      const controller = new AbortController();
+      const response = await fetch(`${proxied.url}${imageUrl}`, { headers: { cookie }, signal: controller.signal });
+      assert.equal(response.status, 200);
+      const during = proxy.openConnections;
+      assert.ok(during >= 1, "the download should hold a storage connection");
+      controller.abort();
+      await response.arrayBuffer().catch(() => {});
+      const deadline = Date.now() + 5000;
+      while (proxy.openConnections >= during && Date.now() < deadline) await delay(50);
+      assert.ok(proxy.openConnections < during, `storage connection stayed open after the client aborted (open: ${proxy.openConnections}, during download: ${during})`);
+      assert.doesNotMatch(proxied.output(), /premature close/i);
+    }));
   });
 
   it("answers 500 and logs photo storage when storage goes away", async () => {
